@@ -1,0 +1,306 @@
+---
+- name: AMS CIS L2 Lite - Windows Server Member Servers
+  hosts: windows_member_servers
+  gather_facts: false
+
+  collections:
+    - ansible.windows
+    - community.windows
+
+  vars:
+    ams_legacy_services_to_disable:
+      - RemoteRegistry
+      - Fax
+      - MapsBroker
+      - RetailDemo
+
+    ams_asr_rules_audit:
+      # Block Office applications from creating child processes
+      - D4F940AB-401B-4EFC-AADC-AD5F3C50688A
+
+      # Block executable content from email client and webmail
+      - BE9BA2D9-53EA-4CDC-84E5-9B1EEEE46550
+
+      # Block Office applications from creating executable content
+      - 3B576869-A4EC-4529-8536-B80A7769E899
+
+      # Block Office applications from injecting code into other processes
+      - 75668C1F-73B5-4CF0-BB93-3ECF5CB7CC84
+
+      # Block JavaScript or VBScript from launching downloaded executables
+      - D3E037E1-3EB8-44C8-A917-57927947596D
+
+  pre_tasks:
+    - name: AMS CIS L2 Lite - Identificar servidor alvo
+      ansible.windows.win_powershell:
+        script: |
+          $cs = Get-CimInstance Win32_ComputerSystem
+          [PSCustomObject]@{
+            ComputerName = $env:COMPUTERNAME
+            Domain       = $cs.Domain
+            PartOfDomain = $cs.PartOfDomain
+          } | ConvertTo-Json -Compress
+      register: ams_target_info
+
+    - name: AMS CIS L2 Lite - Exibir contexto do alvo
+      ansible.builtin.debug:
+        var: ams_target_info.output
+
+  tasks:
+    ###########################################################################
+    # 1. SMBV1 OFF
+    ###########################################################################
+
+    - name: AMS CIS L2 Lite - Remover SMBv1 se estiver instalado
+      ansible.windows.win_powershell:
+        script: |
+          $feature = Get-WindowsOptionalFeature -Online -FeatureName SMB1Protocol -ErrorAction SilentlyContinue
+
+          if ($null -ne $feature -and $feature.State -eq "Enabled") {
+            Disable-WindowsOptionalFeature -Online -FeatureName SMB1Protocol -NoRestart
+            Write-Output "SMBv1 desabilitado. Reinicio pode ser necessario."
+          }
+          else {
+            Write-Output "SMBv1 ausente ou ja desabilitado."
+          }
+      register: ams_smbv1_result
+      changed_when: "'SMBv1 desabilitado' in ams_smbv1_result.output | string"
+      tags:
+        - smbv1
+        - cis_l2_lite
+
+    ###########################################################################
+    # 2. REMOTE REGISTRY OFF
+    ###########################################################################
+
+    - name: AMS CIS L2 Lite - Desabilitar servico Remote Registry
+      ansible.windows.win_powershell:
+        script: |
+          $svc = Get-Service -Name "RemoteRegistry" -ErrorAction SilentlyContinue
+
+          if ($null -ne $svc) {
+            if ($svc.Status -ne "Stopped") {
+              Stop-Service -Name "RemoteRegistry" -Force
+            }
+
+            Set-Service -Name "RemoteRegistry" -StartupType Disabled
+            Write-Output "RemoteRegistry desabilitado."
+          }
+          else {
+            Write-Output "RemoteRegistry nao encontrado."
+          }
+      register: ams_remote_registry_result
+      changed_when: "'RemoteRegistry desabilitado' in ams_remote_registry_result.output | string"
+      tags:
+        - remote_registry
+        - cis_l2_lite
+
+    ###########################################################################
+    # 3. UAC AVANCADO
+    ###########################################################################
+
+    - name: AMS CIS L2 Lite - Habilitar UAC
+      ansible.windows.win_regedit:
+        path: HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System
+        name: EnableLUA
+        data: 1
+        type: dword
+        state: present
+      tags:
+        - uac
+        - cis_l2_lite
+
+    - name: AMS CIS L2 Lite - Exigir consentimento administrativo
+      ansible.windows.win_regedit:
+        path: HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System
+        name: ConsentPromptBehaviorAdmin
+        data: 2
+        type: dword
+        state: present
+      tags:
+        - uac
+        - cis_l2_lite
+
+    - name: AMS CIS L2 Lite - Usar Secure Desktop no prompt UAC
+      ansible.windows.win_regedit:
+        path: HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System
+        name: PromptOnSecureDesktop
+        data: 1
+        type: dword
+        state: present
+      tags:
+        - uac
+        - cis_l2_lite
+
+    ###########################################################################
+    # 4. NTLM - AUDITORIA APENAS
+    ###########################################################################
+
+    - name: AMS CIS L2 Lite - Habilitar auditoria de NTLM recebido
+      ansible.windows.win_regedit:
+        path: HKLM:\SYSTEM\CurrentControlSet\Control\Lsa\MSV1_0
+        name: AuditReceivingNTLMTraffic
+        data: 2
+        type: dword
+        state: present
+      tags:
+        - ntlm_audit
+        - cis_l2_lite
+
+    - name: AMS CIS L2 Lite - Habilitar auditoria de NTLM enviado
+      ansible.windows.win_regedit:
+        path: HKLM:\SYSTEM\CurrentControlSet\Control\Lsa\MSV1_0
+        name: RestrictSendingNTLMTraffic
+        data: 1
+        type: dword
+        state: present
+      tags:
+        - ntlm_audit
+        - cis_l2_lite
+
+    ###########################################################################
+    # 5. LM HASH OFF
+    ###########################################################################
+
+    - name: AMS CIS L2 Lite - Nao armazenar LM Hash
+      ansible.windows.win_regedit:
+        path: HKLM:\SYSTEM\CurrentControlSet\Control\Lsa
+        name: NoLMHash
+        data: 1
+        type: dword
+        state: present
+      tags:
+        - lm_hash
+        - cis_l2_lite
+
+    ###########################################################################
+    # 6. POWERSHELL LOGGING AVANCADO
+    ###########################################################################
+
+    - name: AMS CIS L2 Lite - Habilitar Invocation Header no Script Block Logging
+      ansible.windows.win_regedit:
+        path: HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell\ScriptBlockLogging
+        name: EnableScriptBlockInvocationLogging
+        data: 1
+        type: dword
+        state: present
+      tags:
+        - powershell_advanced_logging
+        - cis_l2_lite
+
+    ###########################################################################
+    # 7. SERVICOS LEGADOS DE BAIXO USO
+    ###########################################################################
+
+    - name: AMS CIS L2 Lite - Desabilitar servicos legados quando existirem
+      ansible.windows.win_powershell:
+        script: |
+          $serviceName = "{{ item }}"
+          $svc = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
+
+          if ($null -ne $svc) {
+            if ($svc.Status -ne "Stopped") {
+              Stop-Service -Name $serviceName -Force -ErrorAction SilentlyContinue
+            }
+
+            Set-Service -Name $serviceName -StartupType Disabled
+            Write-Output "$serviceName desabilitado."
+          }
+          else {
+            Write-Output "$serviceName nao encontrado."
+          }
+      loop: "{{ ams_legacy_services_to_disable }}"
+      register: ams_legacy_services_result
+      changed_when: "'desabilitado' in ams_legacy_services_result.output | string"
+      tags:
+        - legacy_services
+        - cis_l2_lite
+
+    ###########################################################################
+    # 8. AUTORUN / AUTOPLAY OFF
+    ###########################################################################
+
+    - name: AMS CIS L2 Lite - Desabilitar AutoRun
+      ansible.windows.win_regedit:
+        path: HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer
+        name: NoAutoRun
+        data: 1
+        type: dword
+        state: present
+      tags:
+        - autorun
+        - cis_l2_lite
+
+    - name: AMS CIS L2 Lite - Desabilitar AutoPlay para todos os drives
+      ansible.windows.win_regedit:
+        path: HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer
+        name: NoDriveTypeAutoRun
+        data: 255
+        type: dword
+        state: present
+      tags:
+        - autoplay
+        - cis_l2_lite
+
+    - name: AMS CIS L2 Lite - Desabilitar AutoPlay para dispositivos nao-volume
+      ansible.windows.win_regedit:
+        path: HKLM:\SOFTWARE\Policies\Microsoft\Windows\Explorer
+        name: NoAutoplayfornonVolume
+        data: 1
+        type: dword
+        state: present
+      tags:
+        - autoplay
+        - cis_l2_lite
+
+    ###########################################################################
+    # 9. WINDOWS ERROR REPORTING - CONTER ENVIO AUTOMATICO
+    ###########################################################################
+
+    - name: AMS CIS L2 Lite - Desabilitar Windows Error Reporting automatico
+      ansible.windows.win_regedit:
+        path: HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting
+        name: Disabled
+        data: 1
+        type: dword
+        state: present
+      tags:
+        - windows_error_reporting
+        - cis_l2_lite
+
+    ###########################################################################
+    # 10. DEFENDER ASR - AUDIT MODE
+    ###########################################################################
+
+    - name: AMS CIS L2 Lite - Configurar Defender ASR em modo auditoria
+      ansible.windows.win_powershell:
+        script: |
+          if (Get-Command Add-MpPreference -ErrorAction SilentlyContinue) {
+            $rules = @(
+              {% for rule in ams_asr_rules_audit %}
+              "{{ rule }}"{% if not loop.last %},{% endif %}
+              {% endfor %}
+            )
+
+            foreach ($rule in $rules) {
+              Add-MpPreference -AttackSurfaceReductionRules_Ids $rule -AttackSurfaceReductionRules_Actions AuditMode -ErrorAction SilentlyContinue
+            }
+
+            Write-Output "ASR configurado em modo auditoria."
+          }
+          else {
+            Write-Output "Microsoft Defender PowerShell nao disponivel neste servidor."
+          }
+      register: ams_asr_result
+      changed_when: "'ASR configurado' in ams_asr_result.output | string"
+      tags:
+        - defender_asr_audit
+        - cis_l2_lite
+
+  post_tasks:
+    - name: AMS CIS L2 Lite - Gerar resumo da execucao
+      ansible.builtin.debug:
+        msg:
+          - "AMS CIS L2 Lite aplicado no servidor {{ inventory_hostname }}"
+          - "Itens aplicados: SMBv1 Off, Remote Registry Off, UAC Advanced, NTLM Audit, LM Hash Off, PowerShell Advanced Logging, Legacy Services Off, Autorun/Autoplay Off, Windows Error Reporting e Defender ASR Audit"
+          - "Nao foram aplicadas configuracoes de AD, LDAP, Kerberos, Domain Controllers, bloqueio NTLM, TLS hardening, Credential Guard, Device Guard ou WDAC."

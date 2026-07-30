@@ -1,0 +1,248 @@
+---
+- name: AMS CIS L1 Core - Windows Server
+  hosts: all
+  gather_facts: false
+
+  collections:
+    - ansible.windows
+    - community.windows
+
+  vars:
+
+    ##############################################
+    # PASSWORD POLICY (STANDALONE ONLY)
+    ##############################################
+
+    ams_password_history_size: 24
+    ams_maximum_password_age: 90
+    ams_minimum_password_length: 14
+    ams_password_complexity: 1
+
+    ##############################################
+    # ACCOUNT LOCKOUT (STANDALONE ONLY)
+    ##############################################
+
+    ams_lockout_bad_count: 5
+    ams_lockout_duration: 15
+    ams_reset_lockout_count: 15
+
+    ##############################################
+    # AUDIT POLICY
+    ##############################################
+
+    ams_audit_subcategories:
+
+      - Logon
+      - Logoff
+      - Account Lockout
+      - User Account Management
+      - Security Group Management
+      - Audit Policy Change
+      - Sensitive Privilege Use
+      - Process Creation
+
+  pre_tasks:
+
+    #################################################
+    # DETECT DOMAIN MEMBERSHIP
+    #################################################
+
+    - name: Detectar participação em domínio
+      ansible.windows.win_powershell:
+        script: |
+          $Computer = Get-CimInstance Win32_ComputerSystem
+
+          [PSCustomObject]@{
+              ComputerName = $env:COMPUTERNAME
+              Domain       = $Computer.Domain
+              PartOfDomain = $Computer.PartOfDomain
+          } | ConvertTo-Json -Compress
+      register: domain_info
+
+    - name: Converter informações do domínio
+      ansible.builtin.set_fact:
+        ams_domain_info: "{{ domain_info.output[0] | from_json }}"
+
+    - name: Definir variável de domínio
+      ansible.builtin.set_fact:
+        is_domain_member: "{{ ams_domain_info.PartOfDomain | bool }}"
+
+    - name: Exibir contexto do servidor
+      ansible.builtin.debug:
+        msg:
+          - "Servidor: {{ ams_domain_info.ComputerName }}"
+          - "Domínio: {{ ams_domain_info.Domain }}"
+          - "Ingressado em domínio: {{ is_domain_member }}"
+
+  tasks:
+
+    #################################################
+    # PASSWORD POLICY
+    #################################################
+
+    - block:
+
+        - name: Password History
+          community.windows.win_security_policy:
+            section: System Access
+            key: PasswordHistorySize
+            value: "{{ ams_password_history_size }}"
+
+        - name: Maximum Password Age
+          community.windows.win_security_policy:
+            section: System Access
+            key: MaximumPasswordAge
+            value: "{{ ams_maximum_password_age }}"
+
+        - name: Minimum Password Length
+          community.windows.win_security_policy:
+            section: System Access
+            key: MinimumPasswordLength
+            value: "{{ ams_minimum_password_length }}"
+
+        - name: Password Complexity
+          community.windows.win_security_policy:
+            section: System Access
+            key: PasswordComplexity
+            value: "{{ ams_password_complexity }}"
+
+      when: not is_domain_member
+      tags:
+        - password_policy
+        - cis_l1
+
+    #################################################
+    # ACCOUNT LOCKOUT
+    #################################################
+
+    - block:
+
+        - name: Account Lockout Threshold
+          community.windows.win_security_policy:
+            section: System Access
+            key: LockoutBadCount
+            value: "{{ ams_lockout_bad_count }}"
+
+        - name: Account Lockout Duration
+          community.windows.win_security_policy:
+            section: System Access
+            key: LockoutDuration
+            value: "{{ ams_lockout_duration }}"
+
+        - name: Reset Lockout Counter
+          community.windows.win_security_policy:
+            section: System Access
+            key: ResetLockoutCount
+            value: "{{ ams_reset_lockout_count }}"
+
+      when: not is_domain_member
+      tags:
+        - account_lockout
+        - cis_l1
+
+    #################################################
+    # AUDIT POLICY
+    #################################################
+
+    - name: Configurar Auditoria Avançada
+      ansible.windows.win_powershell:
+        script: |
+          auditpol /set /subcategory:"{{ item }}" /success:enable /failure:enable
+      loop: "{{ ams_audit_subcategories }}"
+      tags:
+        - audit_policy
+        - cis_l1
+
+    #################################################
+    # WINDOWS FIREWALL
+    #################################################
+
+    - name: Habilitar Firewall
+      ansible.windows.win_powershell:
+        script: |
+          Set-NetFirewallProfile `
+            -Profile Domain,Private,Public `
+            -Enabled True
+      tags:
+        - firewall
+        - cis_l1
+
+    #################################################
+    # MICROSOFT DEFENDER
+    #################################################
+
+    - name: Habilitar Realtime Protection
+      ansible.windows.win_powershell:
+        script: |
+          if (Get-Command Set-MpPreference -ErrorAction SilentlyContinue) {
+              Set-MpPreference -DisableRealtimeMonitoring $false
+          }
+      tags:
+        - defender
+        - cis_l1
+
+    - name: Habilitar Cloud Protection
+      ansible.windows.win_powershell:
+        script: |
+          if (Get-Command Set-MpPreference -ErrorAction SilentlyContinue) {
+              Set-MpPreference -MAPSReporting Advanced
+          }
+      tags:
+        - defender
+        - cis_l1
+
+    - name: Habilitar Sample Submission
+      ansible.windows.win_powershell:
+        script: |
+          if (Get-Command Set-MpPreference -ErrorAction SilentlyContinue) {
+              Set-MpPreference -SubmitSamplesConsent 1
+          }
+      tags:
+        - defender
+        - cis_l1
+
+    #################################################
+    # POWERSHELL LOGGING
+    #################################################
+
+    - name: Enable Module Logging
+      ansible.windows.win_regedit:
+        path: HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell\ModuleLogging
+        name: EnableModuleLogging
+        data: 1
+        type: dword
+
+    - name: Configure Module Logging
+      ansible.windows.win_regedit:
+        path: HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell\ModuleLogging\ModuleNames
+        name: "*"
+        data: "*"
+        type: string
+
+    - name: Enable Script Block Logging
+      ansible.windows.win_regedit:
+        path: HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell\ScriptBlockLogging
+        name: EnableScriptBlockLogging
+        data: 1
+        type: dword
+
+    - name: Enable Transcription
+      ansible.windows.win_regedit:
+        path: HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell\Transcription
+        name: EnableTranscripting
+        data: 1
+        type: dword
+
+  post_tasks:
+
+    - name: Resumo CIS
+      ansible.builtin.debug:
+        msg:
+          - "Servidor: {{ inventory_hostname }}"
+          - "Domain Member: {{ is_domain_member }}"
+          - "Password Policy aplicada: {{ not is_domain_member }}"
+          - "Lockout Policy aplicada: {{ not is_domain_member }}"
+          - "Audit Policy aplicada"
+          - "Firewall aplicado"
+          - "Defender aplicado"
+          - "PowerShell Logging aplicado"
