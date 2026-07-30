@@ -1,0 +1,12 @@
+---
+- name: Configurar Auditoria Avançada
+  ansible.windows.win_powershell:
+    script: |
+      auditpol /set /subcategory:"{{ item }}" /success:enable /failure:enable
+  loop: "{{ ams_audit_subcategories }}"
+
+- name: Exportar evidência da auditoria avançada
+  ansible.windows.win_powershell:
+    script: |
+      auditpol /get /category:* /r | Out-File "{{ ams_evidence_path }}\audit_policy_after.csv" -Encoding UTF8
+  changed_when: false

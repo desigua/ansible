@@ -1,0 +1,55 @@
+---
+- name: Exportar Security Policy pós-hardening
+  ansible.windows.win_powershell:
+    script: secedit /export /cfg "{{ ams_evidence_path }}\SecurityPolicy_after.inf"
+  changed_when: false
+- name: Validar BitLocker
+  ansible.windows.win_powershell:
+    script: |
+      if (Get-Command Get-BitLockerVolume -ErrorAction SilentlyContinue) { Get-BitLockerVolume | Select MountPoint,ProtectionStatus,EncryptionMethod,VolumeStatus | ConvertTo-Json -Depth 5 } else { [PSCustomObject]@{Available=$false;Reason='Get-BitLockerVolume not available'} | ConvertTo-Json }
+  register: bitlocker_status
+  changed_when: false
+  when: ams_validate_bitlocker | bool
+- ansible.windows.win_copy:
+    dest: "{{ ams_evidence_path }}\bitlocker_status.json"
+    content: "{{ bitlocker_status.output | default([]) | join('') }}"
+  when: ams_validate_bitlocker | bool
+- name: Coletar administradores locais
+  ansible.windows.win_powershell:
+    script: Get-LocalGroupMember Administrators | Select Name,ObjectClass,PrincipalSource | ConvertTo-Json -Depth 5
+  register: local_admins
+  changed_when: false
+  when: ams_validate_local_admins | bool
+- ansible.windows.win_copy:
+    dest: "{{ ams_evidence_path }}\local_administrators.json"
+    content: "{{ local_admins.output | default([]) | join('') }}"
+  when: ams_validate_local_admins | bool
+- name: Coletar contas de serviço
+  ansible.windows.win_powershell:
+    script: Get-WmiObject Win32_Service | Select Name,DisplayName,StartName,State,StartMode | ConvertTo-Json -Depth 5
+  register: service_accounts
+  changed_when: false
+  when: ams_validate_service_accounts | bool
+- ansible.windows.win_copy:
+    dest: "{{ ams_evidence_path }}\service_accounts.json"
+    content: "{{ service_accounts.output | default([]) | join('') }}"
+  when: ams_validate_service_accounts | bool
+- name: Validar NTP
+  ansible.windows.win_powershell:
+    script: w32tm /query /status
+  register: ntp_status
+  changed_when: false
+- ansible.windows.win_copy:
+    dest: "{{ ams_evidence_path }}\ntp_status.txt"
+    content: "{{ ntp_status.output | default([]) | join('\n') }}"
+- name: Configurar NTP quando habilitado
+  ansible.windows.win_powershell:
+    script: |
+      w32tm /config /manualpeerlist:"{{ ams_ntp_servers | join(' ') }}" /syncfromflags:manual /update
+      Restart-Service w32time
+      w32tm /resync /force
+  when: ams_configure_ntp | bool
+- name: Configurar Time Zone quando habilitado
+  ansible.windows.win_powershell:
+    script: Set-TimeZone -Id "{{ ams_timezone }}"
+  when: ams_configure_timezone | bool

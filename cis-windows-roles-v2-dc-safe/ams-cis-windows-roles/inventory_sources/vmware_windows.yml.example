@@ -1,0 +1,18 @@
+---
+plugin: community.vmware.vmware_vm_inventory
+strict: false
+with_tags: true
+properties:
+  - name
+  - config.guestFullName
+  - guest.ipAddress
+  - config.uuid
+filters:
+  - "'Windows' in config.guestFullName"
+compose:
+  ansible_host: guest.ipAddress
+groups:
+  windows_servers: "'Windows' in config.guestFullName"
+keyed_groups:
+  - key: tags
+    prefix: tag

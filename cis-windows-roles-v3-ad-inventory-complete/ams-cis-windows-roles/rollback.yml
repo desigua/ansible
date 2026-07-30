@@ -1,0 +1,19 @@
+---
+- name: AMS CIS L1 - Rollback básico da política local
+  hosts: all
+  gather_facts: false
+  vars_files:
+    - group_vars/windows_servers.yml
+  tasks:
+    - ansible.builtin.include_role:
+        name: cis_detect_context
+    - ansible.builtin.meta: end_host
+      when:
+        - ams_skip_domain_controllers | bool
+        - ams_cis_profile == 'domain_controller'
+    - ansible.windows.win_stat:
+        path: "{{ ams_backup_path }}\pre_hardening.inf"
+      register: backup_policy
+    - ansible.windows.win_powershell:
+        script: secedit /configure /db C:\Windows\security\local.sdb /cfg "{{ ams_backup_path }}\pre_hardening.inf" /areas SECURITYPOLICY
+      when: backup_policy.stat.exists

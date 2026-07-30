@@ -1,0 +1,123 @@
+---
+- name: Exportar Security Policy pós-hardening
+  ansible.windows.win_powershell:
+    script: |
+      secedit /export /cfg "{{ ams_evidence_path }}\SecurityPolicy_after.inf"
+  changed_when: false
+
+- name: Validar BitLocker
+  ansible.windows.win_powershell:
+    script: |
+      if (Get-Command Get-BitLockerVolume -ErrorAction SilentlyContinue) {
+        Get-BitLockerVolume | Select-Object MountPoint,ProtectionStatus,EncryptionMethod,VolumeStatus | ConvertTo-Json -Depth 5
+      } else {
+        [PSCustomObject]@{Available=$false;Reason='Get-BitLockerVolume not available'} | ConvertTo-Json
+      }
+  register: bitlocker_status
+  changed_when: false
+  when: ams_validate_bitlocker | bool
+
+- name: Salvar evidência BitLocker
+  ansible.windows.win_copy:
+    dest: "{{ ams_evidence_path }}\bitlocker_status.json"
+    content: "{{ bitlocker_status.output | default([]) | join('') }}"
+  when: ams_validate_bitlocker | bool
+
+- name: Coletar administradores locais
+  ansible.windows.win_powershell:
+    script: |
+      Get-LocalGroupMember Administrators | Select-Object Name,ObjectClass,PrincipalSource | ConvertTo-Json -Depth 5
+  register: local_admins
+  changed_when: false
+  when: ams_validate_local_admins | bool
+
+- name: Salvar evidência de administradores locais
+  ansible.windows.win_copy:
+    dest: "{{ ams_evidence_path }}\local_administrators.json"
+    content: "{{ local_admins.output | default([]) | join('') }}"
+  when: ams_validate_local_admins | bool
+
+- name: Coletar contas de serviço
+  ansible.windows.win_powershell:
+    script: |
+      Get-WmiObject Win32_Service | Select-Object Name,DisplayName,StartName,State,StartMode | ConvertTo-Json -Depth 5
+  register: service_accounts
+  changed_when: false
+  when: ams_validate_service_accounts | bool
+
+- name: Salvar evidência de contas de serviço
+  ansible.windows.win_copy:
+    dest: "{{ ams_evidence_path }}\service_accounts.json"
+    content: "{{ service_accounts.output | default([]) | join('') }}"
+  when: ams_validate_service_accounts | bool
+
+- name: Validar Tamper Protection
+  ansible.windows.win_powershell:
+    script: |
+      if (Get-Command Get-MpComputerStatus -ErrorAction SilentlyContinue) {
+        Get-MpComputerStatus | Select-Object IsTamperProtected,AntivirusEnabled,RealTimeProtectionEnabled | ConvertTo-Json
+      } else {
+        [PSCustomObject]@{Available=$false;Reason='Microsoft Defender cmdlets not available'} | ConvertTo-Json
+      }
+  register: tamper_status
+  changed_when: false
+  when: ams_validate_tamper_protection | bool
+
+- name: Salvar evidência Tamper Protection
+  ansible.windows.win_copy:
+    dest: "{{ ams_evidence_path }}\tamper_protection.json"
+    content: "{{ tamper_status.output | default([]) | join('') }}"
+  when: ams_validate_tamper_protection | bool
+
+- name: Validar NTP
+  ansible.windows.win_powershell:
+    script: |
+      w32tm /query /status
+  register: ntp_status
+  changed_when: false
+
+- name: Salvar evidência NTP
+  ansible.windows.win_copy:
+    dest: "{{ ams_evidence_path }}\ntp_status.txt"
+    content: "{{ ntp_status.output | default([]) | join('\n') }}"
+
+- name: Configurar NTP quando habilitado
+  ansible.windows.win_powershell:
+    script: |
+      w32tm /config /manualpeerlist:"{{ ams_ntp_servers | join(' ') }}" /syncfromflags:manual /update
+      Restart-Service w32time
+      w32tm /resync /force
+  when: ams_configure_ntp | bool
+
+- name: Validar Time Zone
+  ansible.windows.win_powershell:
+    script: |
+      Get-TimeZone | Select-Object Id,DisplayName | ConvertTo-Json
+  register: timezone_status
+  changed_when: false
+
+- name: Salvar evidência Time Zone
+  ansible.windows.win_copy:
+    dest: "{{ ams_evidence_path }}\timezone_status.json"
+    content: "{{ timezone_status.output | default([]) | join('') }}"
+
+- name: Configurar Time Zone quando habilitado
+  ansible.windows.win_powershell:
+    script: |
+      Set-TimeZone -Id "{{ ams_timezone }}"
+  when: ams_configure_timezone | bool
+
+- name: Exportar resumo final de compliance
+  ansible.windows.win_powershell:
+    script: |
+      $Summary = [PSCustomObject]@{
+        ComputerName = $env:COMPUTERNAME
+        DateTime = (Get-Date).ToString('s')
+        Firewall = Get-NetFirewallProfile | Select-Object Name,Enabled
+        Defender = if (Get-Command Get-MpComputerStatus -ErrorAction SilentlyContinue) { Get-MpComputerStatus | Select-Object AntivirusEnabled,RealTimeProtectionEnabled,IsTamperProtected } else { $null }
+        WinRM = winrm get winrm/config/service
+        TimeZone = Get-TimeZone | Select-Object Id,DisplayName
+        CisProfile = "{{ ams_cis_profile }}"
+      }
+      $Summary | ConvertTo-Json -Depth 8 | Out-File "{{ ams_evidence_path }}\compliance_summary.json" -Encoding UTF8
+  changed_when: false

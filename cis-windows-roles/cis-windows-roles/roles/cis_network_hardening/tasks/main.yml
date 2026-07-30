@@ -1,0 +1,129 @@
+---
+- name: Restrict NTLM Receiving Traffic
+  ansible.windows.win_regedit:
+    path: HKLM:\SYSTEM\CurrentControlSet\Control\Lsa
+    name: RestrictReceivingNTLMTraffic
+    data: 2
+    type: dword
+
+- name: Audit NTLM Receiving Traffic
+  ansible.windows.win_regedit:
+    path: HKLM:\SYSTEM\CurrentControlSet\Control\Lsa\MSV1_0
+    name: AuditReceivingNTLMTraffic
+    data: 2
+    type: dword
+
+- name: LAN Manager Authentication Level - NTLMv2 only
+  ansible.windows.win_regedit:
+    path: HKLM:\SYSTEM\CurrentControlSet\Control\Lsa
+    name: LmCompatibilityLevel
+    data: "{{ ams_lm_compatibility_level }}"
+    type: dword
+
+- name: Limitar Cached Logons
+  ansible.windows.win_regedit:
+    path: HKLM:\Software\Microsoft\Windows NT\CurrentVersion\Winlogon
+    name: CachedLogonsCount
+    data: "{{ ams_cached_logons_count }}"
+    type: string
+
+- name: Desabilitar LLMNR
+  ansible.windows.win_regedit:
+    path: HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\DNSClient
+    name: EnableMulticast
+    data: 0
+    type: dword
+  when: ams_disable_llmnr | bool
+
+- name: Desabilitar NetBIOS em interfaces IP habilitadas
+  ansible.windows.win_powershell:
+    script: |
+      $Adapters = Get-WmiObject Win32_NetworkAdapterConfiguration | Where-Object {$_.IPEnabled}
+      foreach ($Adapter in $Adapters) { $null = $Adapter.SetTcpipNetbios(2) }
+  when: ams_disable_netbios | bool
+
+- name: Bloquear enumeração anônima
+  ansible.windows.win_regedit:
+    path: HKLM:\SYSTEM\CurrentControlSet\Control\Lsa
+    name: RestrictAnonymous
+    data: 1
+    type: dword
+  when: ams_restrict_anonymous | bool
+
+- name: Bloquear enumeração anônima SAM/SID
+  ansible.windows.win_regedit:
+    path: HKLM:\SYSTEM\CurrentControlSet\Control\Lsa
+    name: RestrictAnonymousSAM
+    data: 1
+    type: dword
+  when: ams_restrict_anonymous | bool
+
+- name: Desabilitar SMBv1 Optional Feature
+  ansible.windows.win_powershell:
+    script: |
+      if (Get-WindowsOptionalFeature -Online -FeatureName SMB1Protocol -ErrorAction SilentlyContinue) {
+        Disable-WindowsOptionalFeature -Online -FeatureName SMB1Protocol -NoRestart
+      }
+  when: ams_disable_smbv1 | bool
+  register: smbv1_disable
+  failed_when: false
+
+- name: Desabilitar SMBv1 no LanmanServer
+  ansible.windows.win_regedit:
+    path: HKLM:\SYSTEM\CurrentControlSet\Services\LanmanServer\Parameters
+    name: SMB1
+    data: 0
+    type: dword
+  when: ams_disable_smbv1 | bool
+
+- name: Exigir SMB Signing Client
+  ansible.windows.win_regedit:
+    path: HKLM:\SYSTEM\CurrentControlSet\Services\LanmanWorkstation\Parameters
+    name: RequireSecuritySignature
+    data: 1
+    type: dword
+  when: ams_enable_smb_signing | bool
+
+- name: Exigir SMB Signing Server
+  ansible.windows.win_regedit:
+    path: HKLM:\SYSTEM\CurrentControlSet\Services\LanManServer\Parameters
+    name: RequireSecuritySignature
+    data: 1
+    type: dword
+  when: ams_enable_smb_signing | bool
+
+- name: LDAP Signing Required somente em Domain Controller
+  ansible.windows.win_regedit:
+    path: HKLM:\SYSTEM\CurrentControlSet\Services\NTDS\Parameters
+    name: LDAPServerIntegrity
+    data: 2
+    type: dword
+  when:
+    - ams_enable_ldap_signing_for_dc_only | bool
+    - is_domain_controller | bool
+
+- name: Desabilitar TLS 1.0 e TLS 1.1 Client/Server
+  ansible.windows.win_regedit:
+    path: "HKLM:\\SYSTEM\\CurrentControlSet\\Control\\SecurityProviders\\SCHANNEL\\Protocols\\{{ item.protocol }}\\{{ item.role }}"
+    name: Enabled
+    data: 0
+    type: dword
+  loop:
+    - { protocol: 'TLS 1.0', role: 'Server' }
+    - { protocol: 'TLS 1.0', role: 'Client' }
+    - { protocol: 'TLS 1.1', role: 'Server' }
+    - { protocol: 'TLS 1.1', role: 'Client' }
+  when: ams_disable_legacy_tls | bool
+
+- name: Definir DisabledByDefault para TLS 1.0 e TLS 1.1 Client/Server
+  ansible.windows.win_regedit:
+    path: "HKLM:\\SYSTEM\\CurrentControlSet\\Control\\SecurityProviders\\SCHANNEL\\Protocols\\{{ item.protocol }}\\{{ item.role }}"
+    name: DisabledByDefault
+    data: 1
+    type: dword
+  loop:
+    - { protocol: 'TLS 1.0', role: 'Server' }
+    - { protocol: 'TLS 1.0', role: 'Client' }
+    - { protocol: 'TLS 1.1', role: 'Server' }
+    - { protocol: 'TLS 1.1', role: 'Client' }
+  when: ams_disable_legacy_tls | bool

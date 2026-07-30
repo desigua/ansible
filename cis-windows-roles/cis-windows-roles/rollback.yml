@@ -1,0 +1,25 @@
+---
+- name: AMS CIS L1 - Rollback básico da política local
+  hosts: all
+  gather_facts: false
+
+  vars_files:
+    - group_vars/windows_servers.yml
+
+  tasks:
+    - name: Verificar se backup pre_hardening.inf existe
+      ansible.windows.win_stat:
+        path: "{{ ams_backup_path }}\pre_hardening.inf"
+      register: backup_policy
+
+    - name: Restaurar política de segurança local pelo backup
+      ansible.windows.win_powershell:
+        script: |
+          secedit /configure /db C:\Windows\security\local.sdb /cfg "{{ ams_backup_path }}\pre_hardening.inf" /areas SECURITYPOLICY
+      when: backup_policy.stat.exists
+
+    - name: Aviso sobre rollback parcial
+      ansible.builtin.debug:
+        msg:
+          - "Rollback básico executado quando o arquivo de backup existe."
+          - "Atenção: mudanças de registry, Defender, TLS, RDP, WinRM, serviços e recursos opcionais podem exigir playbook específico de rollback por controle."

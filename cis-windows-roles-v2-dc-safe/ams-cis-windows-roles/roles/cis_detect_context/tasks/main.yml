@@ -1,0 +1,52 @@
+---
+- name: Detectar participação em domínio e função do servidor
+  ansible.windows.win_powershell:
+    script: |
+      $Computer = Get-CimInstance Win32_ComputerSystem
+      $OS = Get-CimInstance Win32_OperatingSystem
+      $IsDC = $false
+      try {
+        $NTDS = Get-Service NTDS -ErrorAction SilentlyContinue
+        if ($null -ne $NTDS) { $IsDC = $true }
+      } catch {}
+
+      [PSCustomObject]@{
+          ComputerName       = $env:COMPUTERNAME
+          Domain             = $Computer.Domain
+          PartOfDomain       = $Computer.PartOfDomain
+          Caption            = $OS.Caption
+          IsDomainController = $IsDC
+      } | ConvertTo-Json -Compress
+  register: domain_info
+  changed_when: false
+
+- name: Converter informações do domínio
+  ansible.builtin.set_fact:
+    ams_domain_info: "{{ domain_info.output[0] | from_json }}"
+
+- name: Definir variáveis de contexto
+  ansible.builtin.set_fact:
+    is_domain_member: "{{ ams_domain_info.PartOfDomain | bool }}"
+    is_domain_controller: "{{ ams_domain_info.IsDomainController | bool }}"
+
+- name: Definir profile CIS consolidado
+  ansible.builtin.set_fact:
+    ams_cis_profile: >-
+      {%- if not is_domain_member -%}
+      standalone
+      {%- elif is_domain_controller -%}
+      domain_controller
+      {%- else -%}
+      member_server
+      {%- endif -%}
+
+- name: Exibir contexto do servidor
+  ansible.builtin.debug:
+    msg:
+      - "Servidor: {{ ams_domain_info.ComputerName }}"
+      - "Sistema: {{ ams_domain_info.Caption }}"
+      - "Domínio: {{ ams_domain_info.Domain }}"
+      - "Domain Member: {{ is_domain_member }}"
+      - "Domain Controller: {{ is_domain_controller }}"
+      - "CIS Profile: {{ ams_cis_profile }}"
+      - "Skip Domain Controllers: {{ ams_skip_domain_controllers | default(true) }}"

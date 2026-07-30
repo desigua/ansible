@@ -1,0 +1,36 @@
+---
+- name: Aplicar Password Policy somente em servidores standalone
+  block:
+    - community.windows.win_security_policy:
+        section: System Access
+        key: PasswordHistorySize
+        value: "{{ ams_password_history_size }}"
+    - community.windows.win_security_policy:
+        section: System Access
+        key: MaximumPasswordAge
+        value: "{{ ams_maximum_password_age }}"
+    - community.windows.win_security_policy:
+        section: System Access
+        key: MinimumPasswordLength
+        value: "{{ ams_minimum_password_length }}"
+    - community.windows.win_security_policy:
+        section: System Access
+        key: PasswordComplexity
+        value: "{{ ams_password_complexity }}"
+  when: ams_cis_profile == 'standalone'
+
+- name: Aplicar Account Lockout somente em servidores standalone
+  block:
+    - community.windows.win_security_policy:
+        section: System Access
+        key: LockoutBadCount
+        value: "{{ ams_lockout_bad_count }}"
+    - community.windows.win_security_policy:
+        section: System Access
+        key: LockoutDuration
+        value: "{{ ams_lockout_duration }}"
+    - community.windows.win_security_policy:
+        section: System Access
+        key: ResetLockoutCount
+        value: "{{ ams_reset_lockout_count }}"
+  when: ams_cis_profile == 'standalone'

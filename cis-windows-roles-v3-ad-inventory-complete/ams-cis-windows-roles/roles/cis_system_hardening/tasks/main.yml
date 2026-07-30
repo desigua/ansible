@@ -1,0 +1,57 @@
+---
+- ansible.windows.win_user:
+    name: Guest
+    account_disabled: true
+  when: ams_disable_guest_account | bool
+- ansible.windows.win_service:
+    name: RemoteRegistry
+    start_mode: disabled
+    state: stopped
+  when: ams_disable_remote_registry | bool
+- ansible.windows.win_regedit:
+    path: HKLM:\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer
+    name: NoDriveTypeAutoRun
+    data: 255
+    type: dword
+  when: ams_disable_autorun | bool
+- ansible.windows.win_regedit:
+    path: HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System
+    name: EnableLUA
+    data: 1
+    type: dword
+  when: ams_enable_uac_hardening | bool
+- ansible.windows.win_regedit:
+    path: HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System
+    name: PromptOnSecureDesktop
+    data: 1
+    type: dword
+  when: ams_enable_uac_hardening | bool
+- ansible.windows.win_regedit:
+    path: HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System
+    name: ConsentPromptBehaviorAdmin
+    data: 2
+    type: dword
+  when: ams_enable_uac_hardening | bool
+- ansible.windows.win_regedit:
+    path: HKLM:\SYSTEM\CurrentControlSet\Control\DeviceGuard
+    name: EnableVirtualizationBasedSecurity
+    data: 1
+    type: dword
+  when: ams_enable_credential_guard | bool
+- ansible.windows.win_regedit:
+    path: HKLM:\SYSTEM\CurrentControlSet\Control\Lsa
+    name: LsaCfgFlags
+    data: 1
+    type: dword
+  when: ams_enable_credential_guard | bool
+- ansible.windows.win_powershell:
+    script: wevtutil sl Security /ms:{{ ams_security_log_size_kb * 1024 }}
+- ansible.windows.win_powershell:
+    script: wevtutil sl System /ms:{{ ams_system_log_size_kb * 1024 }}
+- ansible.windows.win_powershell:
+    script: wevtutil sl Application /ms:{{ ams_application_log_size_kb * 1024 }}
+- ansible.windows.win_service:
+    name: Wecsvc
+    start_mode: auto
+    state: started
+  when: ams_validate_wef | bool

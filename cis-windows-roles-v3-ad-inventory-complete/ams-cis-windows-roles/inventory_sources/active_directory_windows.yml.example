@@ -1,0 +1,12 @@
+---
+# Exemplo conceitual para documentar o uso do script PowerShell no AWX.
+# Publique active_directory_windows.ps1 no repositório Git usado pelo Project do AWX.
+# Configure uma Inventory Source custom script/SCM conforme o padrão adotado na instalação.
+# Parâmetros recomendados:
+#   -MaxInactiveDays 90
+#   -ManagementPorts 5986,5985,22
+# Para incluir Domain Controllers apenas para visibilidade:
+#   -IncludeDomainControllers
+# Mesmo que DCs sejam inventariados, o playbook site.yml não aplica alterações quando:
+#   ams_skip_domain_controllers: true
+#   ams_allow_domain_controller_changes: false

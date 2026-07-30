@@ -1,0 +1,32 @@
+---
+- name: Habilitar Firewall para todos os perfis
+  ansible.windows.win_powershell:
+    script: Set-NetFirewallProfile -Profile Domain,Private,Public -Enabled True
+
+- name: Habilitar Defender Realtime Protection
+  ansible.windows.win_powershell:
+    script: |
+      if (Get-Command Set-MpPreference -ErrorAction SilentlyContinue) { Set-MpPreference -DisableRealtimeMonitoring $false }
+  when: ams_enable_defender_realtime | bool
+
+- name: Habilitar Cloud Protection
+  ansible.windows.win_powershell:
+    script: |
+      if (Get-Command Set-MpPreference -ErrorAction SilentlyContinue) { Set-MpPreference -MAPSReporting Advanced }
+  when: ams_enable_defender_cloud | bool
+
+- name: Habilitar Sample Submission
+  ansible.windows.win_powershell:
+    script: |
+      if (Get-Command Set-MpPreference -ErrorAction SilentlyContinue) { Set-MpPreference -SubmitSamplesConsent 1 }
+  when: ams_enable_defender_sample_submission | bool
+
+- name: Habilitar Windows Defender ASR Rules
+  ansible.windows.win_powershell:
+    script: |
+      if (Get-Command Add-MpPreference -ErrorAction SilentlyContinue) {
+        foreach ($Rule in @({{ ams_defender_asr_rules | map('quote') | join(',') }})) {
+          Add-MpPreference -AttackSurfaceReductionRules_Ids $Rule -AttackSurfaceReductionRules_Actions {{ ams_defender_asr_action }}
+        }
+      }
+  when: ams_enable_defender_asr | bool

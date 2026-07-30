@@ -1,0 +1,124 @@
+---
+##############################################
+# AMS CIS L1 WINDOWS SERVER - GLOBAL VARS
+##############################################
+
+##############################################
+# PASSWORD POLICY - STANDALONE ONLY
+##############################################
+ams_password_history_size: 24
+ams_maximum_password_age: 90
+ams_minimum_password_length: 14
+ams_password_complexity: 1
+
+##############################################
+# ACCOUNT LOCKOUT - STANDALONE ONLY
+##############################################
+ams_lockout_bad_count: 5
+ams_lockout_duration: 15
+ams_reset_lockout_count: 15
+
+##############################################
+# AUDIT POLICY
+##############################################
+ams_audit_subcategories:
+  - Logon
+  - Logoff
+  - Account Lockout
+  - User Account Management
+  - Security Group Management
+  - Audit Policy Change
+  - Sensitive Privilege Use
+  - Process Creation
+
+##############################################
+# PATHS
+##############################################
+ams_base_path: C:\AMS\CIS
+ams_evidence_path: C:\AMS\CIS\Evidence
+ams_backup_path: C:\AMS\CIS\Backup
+ams_powershell_transcript_path: C:\Logs\PowerShell
+
+##############################################
+# EVENT LOG SIZE - KB
+##############################################
+ams_security_log_size_kb: 196608
+ams_system_log_size_kb: 65536
+ams_application_log_size_kb: 65536
+
+##############################################
+# NETWORK / PROTOCOL HARDENING
+##############################################
+ams_disable_smbv1: true
+ams_lm_compatibility_level: 5
+ams_cached_logons_count: "4"
+ams_disable_llmnr: true
+ams_disable_netbios: true
+ams_restrict_anonymous: true
+ams_enable_smb_signing: true
+ams_enable_ldap_signing_for_dc_only: true
+ams_disable_legacy_tls: true
+
+##############################################
+# SYSTEM HARDENING
+##############################################
+ams_disable_guest_account: true
+ams_disable_remote_registry: true
+ams_disable_autorun: true
+ams_enable_uac_hardening: true
+ams_enable_credential_guard: true
+
+##############################################
+# MICROSOFT DEFENDER
+##############################################
+ams_enable_defender_realtime: true
+ams_enable_defender_cloud: true
+ams_enable_defender_sample_submission: true
+ams_enable_defender_asr: true
+ams_defender_asr_action: Enabled
+ams_defender_asr_rules:
+  # Block all Office applications from creating child processes
+  - D4F940AB-401B-4EFC-AADC-AD5F3C50688A
+  # Block executable content from email client and webmail
+  - BE9BA2D9-53EA-4CDC-84E5-9B1EEEE46550
+  # Block abuse of exploited vulnerable signed drivers
+  - 56A863A9-875E-4185-98A7-B882C64B5CE5
+  # Block credential stealing from LSASS
+  - 9E6C4E1F-7D60-472F-BA1A-A39EF669E4B2
+  # Block Office from creating executable content
+  - 3B576869-A4EC-4529-8536-B80A7769E899
+
+##############################################
+# REMOTE ACCESS
+##############################################
+ams_enable_rdp_hardening: true
+ams_enable_winrm_hardening: true
+
+##############################################
+# NTP / TIMEZONE
+##############################################
+ams_configure_ntp: false
+ams_ntp_servers:
+  - ntp1.ams.local
+  - ntp2.ams.local
+ams_configure_timezone: true
+ams_timezone: E. South America Standard Time
+
+##############################################
+# VALIDATION ONLY CONTROLS
+##############################################
+ams_validate_bitlocker: true
+ams_validate_local_admins: true
+ams_validate_service_accounts: true
+ams_validate_tamper_protection: true
+ams_validate_wef: true
+
+##############################################
+# DOCUMENTED WEAKNESSES ADDRESSED BY THIS VERSION
+##############################################
+ams_previous_weaknesses_addressed:
+  - "Não cobria a maior parte dos controles CIS L1 Windows Server"
+  - "Não gerava rollback"
+  - "Não exportava evidências"
+  - "Não definia diretório de transcrição"
+  - "Não validava conformidade antes/depois"

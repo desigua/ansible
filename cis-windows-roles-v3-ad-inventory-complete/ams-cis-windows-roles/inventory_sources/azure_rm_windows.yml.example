@@ -1,0 +1,14 @@
+---
+plugin: azure.azcollection.azure_rm
+include_vm_resource_groups:
+  - '*'
+auth_source: auto
+conditional_groups:
+  windows_servers: "os_profile is defined and os_profile.windows_configuration is defined"
+keyed_groups:
+  - key: tags.Environment | default('untagged')
+    prefix: env
+  - key: resource_group
+    prefix: rg
+hostvar_expressions:
+  ansible_host: private_ipv4_addresses[0] if private_ipv4_addresses else public_ipv4_addresses[0]

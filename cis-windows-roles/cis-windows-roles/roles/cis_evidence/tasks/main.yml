@@ -1,0 +1,28 @@
+---
+- name: Criar diretórios de evidência e backup
+  ansible.windows.win_file:
+    path: "{{ item }}"
+    state: directory
+  loop:
+    - "{{ ams_base_path }}"
+    - "{{ ams_evidence_path }}"
+    - "{{ ams_backup_path }}"
+    - "{{ ams_powershell_transcript_path }}"
+
+- name: Backup inicial da política de segurança local
+  ansible.windows.win_powershell:
+    script: |
+      secedit /export /cfg "{{ ams_backup_path }}\pre_hardening.inf"
+      auditpol /backup /file:"{{ ams_backup_path }}\pre_auditpol.csv"
+      Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' | ConvertTo-Json -Depth 5 | Out-File "{{ ams_backup_path }}\pre_lsa_registry.json" -Encoding UTF8
+      Get-NetFirewallProfile | Select-Object Name,Enabled | ConvertTo-Json | Out-File "{{ ams_backup_path }}\pre_firewall.json" -Encoding UTF8
+  changed_when: false
+
+- name: Registrar pontos fracos tratados nesta versão
+  ansible.windows.win_copy:
+    dest: "{{ ams_evidence_path }}\weaknesses_addressed.txt"
+    content: |
+      Pontos fracos tratados nesta versão modular:
+      {% for item in ams_previous_weaknesses_addressed %}
+      - {{ item }}
+      {% endfor %}

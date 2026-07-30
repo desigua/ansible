@@ -1,0 +1,42 @@
+---
+- name: RDP - Habilitar NLA
+  ansible.windows.win_regedit:
+    path: HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp
+    name: UserAuthentication
+    data: 1
+    type: dword
+  when: ams_enable_rdp_hardening | bool
+
+- name: RDP - Forçar Security Layer TLS
+  ansible.windows.win_regedit:
+    path: HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp
+    name: SecurityLayer
+    data: 2
+    type: dword
+  when: ams_enable_rdp_hardening | bool
+
+- name: RDP - Definir nível alto de criptografia
+  ansible.windows.win_regedit:
+    path: HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp
+    name: MinEncryptionLevel
+    data: 3
+    type: dword
+  when: ams_enable_rdp_hardening | bool
+
+- name: WinRM - Bloquear tráfego sem criptografia
+  ansible.windows.win_powershell:
+    script: |
+      winrm set winrm/config/service '@{AllowUnencrypted="false"}'
+  when: ams_enable_winrm_hardening | bool
+
+- name: WinRM - Desabilitar Basic Auth no serviço
+  ansible.windows.win_powershell:
+    script: |
+      winrm set winrm/config/service/auth '@{Basic="false"}'
+  when: ams_enable_winrm_hardening | bool
+
+- name: WinRM - Desabilitar Basic Auth no client
+  ansible.windows.win_powershell:
+    script: |
+      winrm set winrm/config/client/auth '@{Basic="false"}'
+  when: ams_enable_winrm_hardening | bool
