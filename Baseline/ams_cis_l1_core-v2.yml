@@ -48,6 +48,8 @@
     #################################################
 
     - name: Detectar participação em domínio
+      # Consulta o WMI/CIM local para descobrir se o servidor está
+      # ingressado em um domínio Active Directory ou é standalone.
       ansible.windows.win_powershell:
         script: |
           $Computer = Get-CimInstance Win32_ComputerSystem
@@ -60,14 +62,20 @@
       register: domain_info
 
     - name: Converter informações do domínio
+      # Converte o JSON retornado pelo PowerShell em uma variável
+      # utilizável pelo Ansible (dicionário Python).
       ansible.builtin.set_fact:
         ams_domain_info: "{{ domain_info.output[0] | from_json }}"
 
     - name: Definir variável de domínio
+      # Define um booleano simples para facilitar as condições
+      # "when" usadas mais abaixo no playbook (políticas standalone).
       ansible.builtin.set_fact:
         is_domain_member: "{{ ams_domain_info.PartOfDomain | bool }}"
 
     - name: Exibir contexto do servidor
+      # Apenas informativo: mostra no output do job qual servidor está
+      # sendo processado e se ele pertence a um domínio.
       ansible.builtin.debug:
         msg:
           - "Servidor: {{ ams_domain_info.ComputerName }}"
@@ -83,24 +91,31 @@
     - block:
 
         - name: Password History
+          # Define quantas senhas anteriores o Windows deve lembrar,
+          # impedindo reutilização das últimas N senhas.
           community.windows.win_security_policy:
             section: System Access
             key: PasswordHistorySize
             value: "{{ ams_password_history_size }}"
 
         - name: Maximum Password Age
+          # Define o tempo máximo (em dias) que uma senha pode ser
+          # usada antes de expirar e forçar troca.
           community.windows.win_security_policy:
             section: System Access
             key: MaximumPasswordAge
             value: "{{ ams_maximum_password_age }}"
 
         - name: Minimum Password Length
+          # Define o tamanho mínimo exigido para senhas de contas locais.
           community.windows.win_security_policy:
             section: System Access
             key: MinimumPasswordLength
             value: "{{ ams_minimum_password_length }}"
 
         - name: Password Complexity
+          # Exige que a senha atenda a critérios de complexidade
+          # (maiúsculas, minúsculas, números e símbolos).
           community.windows.win_security_policy:
             section: System Access
             key: PasswordComplexity
@@ -118,18 +133,24 @@
     - block:
 
         - name: Account Lockout Threshold
+          # Número de tentativas de login inválidas antes de bloquear
+          # a conta local.
           community.windows.win_security_policy:
             section: System Access
             key: LockoutBadCount
             value: "{{ ams_lockout_bad_count }}"
 
         - name: Account Lockout Duration
+          # Tempo (em minutos) que a conta permanece bloqueada após
+          # atingir o limite de tentativas inválidas.
           community.windows.win_security_policy:
             section: System Access
             key: LockoutDuration
             value: "{{ ams_lockout_duration }}"
 
         - name: Reset Lockout Counter
+          # Tempo (em minutos) até o contador de tentativas inválidas
+          # ser zerado automaticamente.
           community.windows.win_security_policy:
             section: System Access
             key: ResetLockoutCount
@@ -145,6 +166,9 @@
     #################################################
 
     - name: Configurar Auditoria Avançada
+      # Habilita auditoria de sucesso e falha para cada subcategoria
+      # listada em ams_audit_subcategories (logon, gerenciamento de
+      # contas, uso de privilégios sensíveis, etc.).
       ansible.windows.win_powershell:
         script: |
           auditpol /set /subcategory:"{{ item }}" /success:enable /failure:enable
@@ -158,6 +182,8 @@
     #################################################
 
     - name: Habilitar Firewall
+      # Garante que o Firewall do Windows esteja ativo nos três
+      # perfis: Domínio, Privado e Público.
       ansible.windows.win_powershell:
         script: |
           Set-NetFirewallProfile `
@@ -172,6 +198,8 @@
     #################################################
 
     - name: Habilitar Realtime Protection
+      # Ativa a proteção em tempo real do Microsoft Defender,
+      # caso o cmdlet esteja disponível no servidor.
       ansible.windows.win_powershell:
         script: |
           if (Get-Command Set-MpPreference -ErrorAction SilentlyContinue) {
@@ -182,6 +210,8 @@
         - cis_l1
 
     - name: Habilitar Cloud Protection
+      # Define o nível de proteção via nuvem (MAPS) do Defender
+      # como "Advanced", melhorando a detecção de ameaças novas.
       ansible.windows.win_powershell:
         script: |
           if (Get-Command Set-MpPreference -ErrorAction SilentlyContinue) {
@@ -192,6 +222,8 @@
         - cis_l1
 
     - name: Habilitar Sample Submission
+      # Permite o envio automático de amostras suspeitas para a
+      # Microsoft, auxiliando na análise de novas ameaças.
       ansible.windows.win_powershell:
         script: |
           if (Get-Command Set-MpPreference -ErrorAction SilentlyContinue) {
@@ -206,6 +238,8 @@
     #################################################
 
     - name: Enable Module Logging
+      # Habilita o log de módulos do PowerShell, registrando quais
+      # módulos/cmdlets foram carregados durante uma sessão.
       ansible.windows.win_regedit:
         path: HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell\ModuleLogging
         name: EnableModuleLogging
@@ -213,6 +247,8 @@
         type: dword
 
     - name: Configure Module Logging
+      # Define que TODOS os módulos ("*") devem ter suas execuções
+      # registradas no log, sem restringir a módulos específicos.
       ansible.windows.win_regedit:
         path: HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell\ModuleLogging\ModuleNames
         name: "*"
@@ -220,6 +256,8 @@
         type: string
 
     - name: Enable Script Block Logging
+      # Habilita o registro do conteúdo de scripts/blocos executados
+      # no PowerShell, essencial para investigação de incidentes.
       ansible.windows.win_regedit:
         path: HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell\ScriptBlockLogging
         name: EnableScriptBlockLogging
@@ -227,15 +265,54 @@
         type: dword
 
     - name: Enable Transcription
+      # Habilita a transcrição de sessões do PowerShell, salvando
+      # em arquivo tudo que foi digitado/executado no console.
       ansible.windows.win_regedit:
         path: HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell\Transcription
         name: EnableTranscripting
         data: 1
         type: dword
 
+    #################################################
+    # IPv6
+    #################################################
+
+    - name: Desativar IPv6 em todos os adaptadores de rede
+      # Desabilita o binding do protocolo IPv6 (ms_tcpip6) em todas
+      # as interfaces de rede via registro, seguindo recomendação
+      # comum do CIS Benchmark para reduzir a superfície de ataque
+      # quando o IPv6 não é utilizado no ambiente.
+      ansible.windows.win_regedit:
+        path: HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip6\Parameters
+        name: DisabledComponents
+        data: 0xFF
+        type: dword
+      tags:
+        - ipv6
+        - cis_l1
+
+    #################################################
+    # PRINT SPOOLER
+    #################################################
+
+    - name: Parar e desativar o serviço Spooler (Print Spooler)
+      # Desativa o serviço de impressão (Spooler), reduzindo a
+      # superfície de ataque em servidores que não atuam como
+      # print server (o Spooler já foi alvo de diversas
+      # vulnerabilidades críticas, ex: PrintNightmare).
+      ansible.windows.win_service:
+        name: Spooler
+        state: stopped
+        start_mode: disabled
+      tags:
+        - spooler
+        - cis_l1
+
   post_tasks:
 
     - name: Resumo CIS
+      # Exibe um resumo final no output do job, confirmando quais
+      # blocos de hardening foram aplicados neste servidor.
       ansible.builtin.debug:
         msg:
           - "Servidor: {{ inventory_hostname }}"
@@ -246,3 +323,5 @@
           - "Firewall aplicado"
           - "Defender aplicado"
           - "PowerShell Logging aplicado"
+          - "IPv6 desativado"
+          - "Spooler desativado"
