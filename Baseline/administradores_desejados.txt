@@ -1,0 +1,11 @@
+# Lista de administradores locais desejados.
+# Uma conta por linha. Linhas começando com "#" e linhas em branco
+# são ignoradas.
+#
+# Formatos aceitos:
+#   BUILTIN\Administrator      -> conta interna do Windows
+#   .\admlocal                 -> conta local criada manualmente
+#   DOMINIO\usuario            -> conta de domínio (Active Directory)
+
+BUILTIN\Administrator
+.\mabreu

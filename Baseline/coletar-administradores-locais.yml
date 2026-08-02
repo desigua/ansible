@@ -1,0 +1,90 @@
+---
+- name: Coletar administradores locais dos servidores Windows
+  hosts: all
+  gather_facts: false
+
+  vars:
+    # Pasta no controlador (localhost) onde os relatórios serão salvos,
+    # um arquivo por servidor.
+    ams_relatorio_dir: "./relatorios_administradores_locais"
+
+  tasks:
+
+    - name: Criar pasta de relatórios no controlador (se não existir)
+      # Executa em localhost (delegate_to) porque é o controlador quem
+      # vai armazenar os arquivos de saída, não os servidores Windows.
+      ansible.builtin.file:
+        path: "{{ ams_relatorio_dir }}"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+      run_once: true
+
+    - name: Consultar membros do grupo Administrators local
+      # Usa o cmdlet Get-LocalGroupMember para listar todos os membros
+      # do grupo "Administrators" local do servidor (inclui contas
+      # locais e contas de domínio adicionadas ao grupo local).
+      ansible.windows.win_powershell:
+        script: |
+          $membros = Get-LocalGroupMember -Group "Administrators" |
+            Select-Object Name, PrincipalSource, ObjectClass
+
+          $membros | ConvertTo-Json -Compress
+      register: ams_admins_raw
+
+    - name: Converter saída JSON em lista utilizável pelo Ansible
+      # Transforma o JSON retornado pelo PowerShell em uma variável
+      # (lista de dicionários) para uso nas próximas tasks.
+      ansible.builtin.set_fact:
+        ams_admins_local: "{{ ams_admins_raw.output[0] | from_json }}"
+
+    - name: Normalizar para lista (caso só exista 1 membro)
+      # Quando há apenas um administrador, ConvertTo-Json retorna um
+      # objeto único em vez de uma lista — este passo garante que a
+      # variável sempre seja tratada como lista.
+      ansible.builtin.set_fact:
+        ams_admins_local: "{{ [ams_admins_local] if ams_admins_local is mapping else ams_admins_local }}"
+
+    - name: Exibir administradores encontrados no output do job
+      # Apenas informativo, para conferência rápida durante a execução.
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }}: {{ ams_admins_local | map(attribute='Name') | list }}"
+
+    - name: Salvar relatório individual por servidor
+      # Grava um arquivo de texto no controlador com a lista de
+      # administradores locais de cada host, nome do arquivo baseado
+      # no nome do inventário (facilita auditoria posterior).
+      ansible.builtin.copy:
+        dest: "{{ ams_relatorio_dir }}/{{ inventory_hostname }}.txt"
+        content: |
+          Servidor: {{ inventory_hostname }}
+          Data da coleta: {{ lookup('pipe', 'date +%Y-%m-%d\ %H:%M:%S') }}
+          Administradores locais:
+          {% for admin in ams_admins_local %}
+          - {{ admin.Name }} ({{ admin.PrincipalSource }} / {{ admin.ObjectClass }})
+          {% endfor %}
+      delegate_to: localhost
+
+    - name: Consolidar todos os servidores em um único CSV
+      # Adiciona uma linha por administrador/servidor em um CSV
+      # consolidado, útil para abrir no Excel e analisar tudo de
+      # uma vez. "throttle: 1" evita que hosts em paralelo escrevam
+      # no arquivo ao mesmo tempo e corrompam o conteúdo.
+      ansible.builtin.lineinfile:
+        path: "{{ ams_relatorio_dir }}/consolidado_administradores.csv"
+        line: "{{ inventory_hostname }};{{ item.Name }};{{ item.PrincipalSource }};{{ item.ObjectClass }}"
+        create: true
+        insertafter: EOF
+      loop: "{{ ams_admins_local }}"
+      delegate_to: localhost
+      throttle: 1
+
+  post_tasks:
+
+    - name: Resumo da coleta
+      # Mensagem final confirmando onde os relatórios foram salvos.
+      ansible.builtin.debug:
+        msg:
+          - "Servidor: {{ inventory_hostname }}"
+          - "Total de administradores locais encontrados: {{ ams_admins_local | length }}"
+          - "Relatório salvo em: {{ ams_relatorio_dir }}/{{ inventory_hostname }}.txt"

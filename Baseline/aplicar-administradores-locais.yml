@@ -1,0 +1,140 @@
+---
+- name: Ajustar administradores locais conforme lista desejada
+  hosts: all
+  gather_facts: false
+
+  collections:
+    - community.windows
+
+  vars:
+    # Caminho do arquivo .txt (no controlador) com a lista de
+    # administradores desejados, um por linha. Aceita comentários
+    # com "#" e linhas em branco (que são ignoradas).
+    # Formato de cada linha, exemplos:
+    #   BUILTIN\Administrator
+    #   .\admlocal
+    #   DOMINIO\usuario
+    ams_lista_admins_file: "./administradores_desejados.txt"
+
+    # Modo de simulação: quando "true", o playbook só MOSTRA o que
+    # seria alterado (adições/remoções), sem aplicar nada no servidor.
+    # Defina como "false" (ou use -e ams_modo_simulacao=false na
+    # execução) somente depois de revisar o relatório com atenção.
+    ams_modo_simulacao: true
+
+    # Conta que NUNCA pode ser removida do grupo Administrators,
+    # normalmente a conta usada pelo Ansible/AWX para conectar via
+    # WinRM. Evita que o playbook tire o próprio acesso remoto.
+    ams_conta_protegida: "BUILTIN\\Administrator"
+
+  tasks:
+
+    #################################################
+    # CARREGAR LISTA DESEJADA
+    #################################################
+
+    - name: Ler lista de administradores desejados do arquivo txt
+      # Lê o conteúdo do arquivo no controlador, remove linhas em
+      # branco e linhas comentadas com "#", e monta a lista final
+      # de contas que devem estar no grupo Administrators.
+      ansible.builtin.set_fact:
+        ams_admins_desejados: >-
+          {{
+            lookup('file', ams_lista_admins_file).splitlines()
+            | reject('match', '^\s*$')
+            | reject('match', '^\s*#')
+            | map('trim')
+            | list
+          }}
+      delegate_to: localhost
+      run_once: false
+
+    - name: Garantir que a conta protegida está na lista desejada
+      # Trava de segurança: se a conta usada para conectar (WinRM)
+      # não estiver na lista desejada, o playbook para aqui — assim
+      # você não corre o risco de perder o acesso remoto ao servidor.
+      ansible.builtin.assert:
+        that:
+          - ams_conta_protegida in ams_admins_desejados
+        fail_msg: >-
+          A conta protegida "{{ ams_conta_protegida }}" não está na
+          lista de administradores desejados. Adicione-a no arquivo
+          {{ ams_lista_admins_file }} antes de continuar.
+
+    #################################################
+    # COLETAR ESTADO ATUAL
+    #################################################
+
+    - name: Consultar administradores locais atuais
+      # Lista os membros atuais do grupo Administrators local antes
+      # de qualquer alteração, para permitir a comparação (diff).
+      ansible.windows.win_powershell:
+        script: |
+          $membros = Get-LocalGroupMember -Group "Administrators" |
+            Select-Object -ExpandProperty Name
+
+          $membros | ConvertTo-Json -Compress
+      register: ams_admins_raw
+
+    - name: Converter saída JSON em lista
+      ansible.builtin.set_fact:
+        ams_admins_atuais: "{{ ams_admins_raw.output[0] | from_json }}"
+
+    - name: Normalizar para lista (caso só exista 1 membro atual)
+      ansible.builtin.set_fact:
+        ams_admins_atuais: "{{ [ams_admins_atuais] if ams_admins_atuais is string else ams_admins_atuais }}"
+
+    #################################################
+    # CALCULAR DIFERENÇAS (RELATÓRIO)
+    #################################################
+
+    - name: Calcular contas que serão adicionadas
+      # Contas que estão na lista desejada mas ainda não estão no
+      # servidor — serão INCLUÍDAS no grupo Administrators.
+      ansible.builtin.set_fact:
+        ams_sera_adicionado: "{{ ams_admins_desejados | difference(ams_admins_atuais) }}"
+
+    - name: Calcular contas que serão removidas
+      # Contas que estão atualmente no servidor mas não constam na
+      # lista desejada — serão REMOVIDAS do grupo Administrators.
+      ansible.builtin.set_fact:
+        ams_sera_removido: "{{ ams_admins_atuais | difference(ams_admins_desejados) }}"
+
+    - name: Exibir relatório de alterações previstas
+      # Mostra claramente o que vai mudar antes de aplicar, mesmo
+      # quando ams_modo_simulacao estiver "false".
+      ansible.builtin.debug:
+        msg:
+          - "Servidor: {{ inventory_hostname }}"
+          - "Administradores atuais: {{ ams_admins_atuais }}"
+          - "Administradores desejados: {{ ams_admins_desejados }}"
+          - "Serão ADICIONADOS: {{ ams_sera_adicionado }}"
+          - "Serão REMOVIDOS: {{ ams_sera_removido }}"
+          - "Modo simulação (nenhuma alteração real): {{ ams_modo_simulacao }}"
+
+    #################################################
+    # APLICAR ALTERAÇÕES
+    #################################################
+
+    - name: Ajustar grupo Administrators conforme a lista desejada
+      # state: "pure" faz o grupo ficar EXATAMENTE igual à lista
+      # informada — adiciona quem está faltando e remove quem não
+      # deveria estar mais lá. Só executa de fato quando
+      # ams_modo_simulacao estiver "false"; caso contrário, o
+      # Ansible só simula (check_mode) e mostra o que mudaria.
+      community.windows.win_group_membership:
+        name: Administrators
+        members: "{{ ams_admins_desejados }}"
+        state: pure
+      check_mode: "{{ ams_modo_simulacao }}"
+      register: ams_resultado_ajuste
+
+  post_tasks:
+
+    - name: Resumo final
+      # Confirma se houve alteração real ou se foi apenas simulação.
+      ansible.builtin.debug:
+        msg:
+          - "Servidor: {{ inventory_hostname }}"
+          - "Alteração aplicada de fato: {{ not ams_modo_simulacao }}"
+          - "Houve mudança no grupo: {{ ams_resultado_ajuste.changed }}"
