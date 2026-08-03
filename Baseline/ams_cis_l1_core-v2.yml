@@ -15,7 +15,7 @@
 
     ams_password_history_size: 24
     ams_maximum_password_age: 90
-    ams_minimum_password_length: 14
+    ams_minimum_password_length: 9
     ams_password_complexity: 1
 
     ##############################################
