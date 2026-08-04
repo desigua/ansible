@@ -25,15 +25,65 @@
         $saida += ""
 
         try {
+
             $admins = Get-LocalGroupMember -Group "Administrators" | Sort-Object Name
 
+            $mabreuEncontrado = $false
+            $extras = @()
+
             foreach ($admin in $admins) {
+
                 $saida += "$($admin.Name) [$($admin.ObjectClass)]"
+
+                if ($admin.Name -match "\\mabreu$")
+                {
+                    $mabreuEncontrado = $true
+                }
+                else
+                {
+                    $extras += $admin.Name
+                }
             }
+
+            $saida += ""
+            $saida += "VALIDACAO:"
+            $saida += "============"
+
+            if ($mabreuEncontrado)
+            {
+                $saida += "MABREU: OK"
+            }
+            else
+            {
+                $saida += "MABREU: FALTANDO"
+            }
+
+            $saida += ""
+
+            if ($extras.Count -eq 0)
+            {
+                $saida += "ADMINISTRADORES EXTRAS: NENHUM"
+                $saida += "STATUS: COMPLIANT"
+            }
+            else
+            {
+                $saida += "ADMINISTRADORES EXTRAS:"
+
+                foreach ($extra in $extras)
+                {
+                    $saida += " - $extra"
+                }
+
+                $saida += "STATUS: NON-COMPLIANT"
+            }
+
         }
         catch {
+
+            $saida += ""
             $saida += "ERRO AO CONSULTAR ADMINISTRADORES:"
             $saida += $_.Exception.Message
+
         }
 
         $saida | Out-File -FilePath C:\Temp\adm.txt -Encoding UTF8 -Force
