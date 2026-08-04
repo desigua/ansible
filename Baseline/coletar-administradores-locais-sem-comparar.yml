@@ -1,0 +1,47 @@
+---
+- name: Coletar administradores locais
+  hosts: all
+  gather_facts: false
+
+  tasks:
+
+    - name: Criar pasta C:\Temp
+      ansible.windows.win_file:
+        path: C:\Temp
+        state: directory
+
+    - name: Gerar relatório de administradores locais
+      ansible.windows.win_shell: |
+
+        $hostname = hostname
+
+        $saida = @()
+        $saida += "========================================="
+        $saida += "Servidor: $hostname"
+        $saida += "Data: $(Get-Date)"
+        $saida += "========================================="
+        $saida += ""
+        $saida += "ADMINISTRADORES LOCAIS:"
+        $saida += ""
+
+        try {
+            $admins = Get-LocalGroupMember -Group "Administrators" | Sort-Object Name
+
+            foreach ($admin in $admins) {
+                $saida += "$($admin.Name) [$($admin.ObjectClass)]"
+            }
+        }
+        catch {
+            $saida += "ERRO AO CONSULTAR ADMINISTRADORES:"
+            $saida += $_.Exception.Message
+        }
+
+        $saida | Out-File -FilePath C:\Temp\adm.txt -Encoding UTF8 -Force
+
+        Get-Content C:\Temp\adm.txt
+
+      register: resultado
+
+    - name: Exibir resultado no AWX
+      debug:
+        var: resultado.stdout_lines
