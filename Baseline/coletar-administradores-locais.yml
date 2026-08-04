@@ -132,4 +132,3 @@
     - name: Mostrar resultado
       debug:
         var: resultado.stdout_lines
-`
