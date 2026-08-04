@@ -39,13 +39,21 @@
 
                 $saida += "$($admin.Name) [$($admin.ObjectClass)]"
 
-                $usuario = $admin.Name
-                $usuario = $usuario.Substring($usuario.LastIndexOf('\') + 1)
-                $usuario = $usuario.ToLower()
+                $usuario = $admin.Name.ToString().ToLower()
 
                 $encontrados += $usuario
 
-                if ($usuario -notin $permitidos)
+                $autorizado = $false
+
+                foreach ($permitido in $permitidos)
+                {
+                    if ($usuario -match :Escape($permitido) + '$')
+                    {
+                        $autorizado = $true
+                    }
+                }
+
+                if (-not $autorizado)
                 {
                     $extras += $admin.Name
                 }
@@ -55,7 +63,17 @@
 
             foreach ($permitido in $permitidos)
             {
-                if ($permitido -notin $encontrados)
+                $existe = $false
+
+                foreach ($usuario in $encontrados)
+                {
+                    if ($usuario -match "\\$permitido$")
+                    {
+                        $existe = $true
+                    }
+                }
+
+                if (-not $existe)
                 {
                     $faltando += $permitido
                 }
@@ -67,6 +85,7 @@
             $saida += ""
 
             $saida += "ADMINISTRADORES PERMITIDOS:"
+
             foreach ($permitido in $permitidos)
             {
                 $saida += " - $permitido"
