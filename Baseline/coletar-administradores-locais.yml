@@ -39,7 +39,7 @@
 
                 $saida += "$($admin.Name) [$($admin.ObjectClass)]"
 
-                $usuario = $admin.Name.ToString().ToLower()
+                $usuario = $admin.Name.ToLower().Trim()
 
                 $encontrados += $usuario
 
@@ -47,9 +47,10 @@
 
                 foreach ($permitido in $permitidos)
                 {
-                    if ($usuario -match :Escape($permitido) + '$')
+                    if ($usuario.EndsWith($permitido.ToLower()))
                     {
                         $autorizado = $true
+                        break
                     }
                 }
 
@@ -67,9 +68,10 @@
 
                 foreach ($usuario in $encontrados)
                 {
-                    if ($usuario -match "\\$permitido$")
+                    if ($usuario.EndsWith($permitido.ToLower()))
                     {
                         $existe = $true
+                        break
                     }
                 }
 
