@@ -1,39 +1,47 @@
 ---
-- name: Diagnostico Windows
+- name: Coletar administradores locais
   hosts: all
   gather_facts: false
 
   tasks:
 
-    - name: Quem está executando
-      ansible.windows.win_shell: whoami
-      register: who
+    - name: Criar pasta C:\Temp
+      ansible.windows.win_file:
+        path: C:\Temp
+        state: directory
 
-    - debug:
-        var: who.stdout
-
-    - name: Criar pasta
+    - name: Gerar relatório de administradores locais
       ansible.windows.win_shell: |
-        New-Item -Path C:\Temp -ItemType Directory -Force
-        Test-Path C:\Temp
-      register: pasta
 
-    - debug:
-        var: pasta.stdout_lines
+        $hostname = hostname
 
-    - name: Criar arquivo
-      ansible.windows.win_shell: |
-        "Servidor: $env:COMPUTERNAME" | Out-File C:\Temp\adm.txt -Encoding UTF8 -Force
-        Test-Path C:\Temp\adm.txt
-      register: arquivo
+        $saida = @()
+        $saida += "========================================="
+        $saida += "Servidor: $hostname"
+        $saida += "Data: $(Get-Date)"
+        $saida += "========================================="
+        $saida += ""
+        $saida += "ADMINISTRADORES LOCAIS:"
+        $saida += ""
 
-    - debug:
-        var: arquivo.stdout_lines
+        try {
+            $admins = Get-LocalGroupMember -Group "Administrators" | Sort-Object Name
 
-    - name: Exibir conteúdo
-      ansible.windows.win_shell: |
+            foreach ($admin in $admins) {
+                $saida += "$($admin.Name) [$($admin.ObjectClass)]"
+            }
+        }
+        catch {
+            $saida += "ERRO AO CONSULTAR ADMINISTRADORES:"
+            $saida += $_.Exception.Message
+        }
+
+        $saida | Out-File -FilePath C:\Temp\adm.txt -Encoding UTF8 -Force
+
         Get-Content C:\Temp\adm.txt
-      register: conteudo
 
-    - debug:
-        var: conteudo.stdout_lines
+      register: resultado
+
+    - name: Exibir resultado no AWX
+      debug:
+        var: resultado.stdout_lines
