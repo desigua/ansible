@@ -1,31 +1,30 @@
 ---
-- name: Coletar administradores locais
+- name: Teste de escrita
   hosts: windows
   gather_facts: false
 
   tasks:
 
-    - name: Garantir C:\Temp
-      ansible.windows.win_file:
-        path: C:\Temp
-        state: directory
-
-    - name: Coletar membros do grupo Administrators
+    - name: Criar C:\Temp
       ansible.windows.win_shell: |
-        $membros = Get-LocalGroupMember -Group "Administrators"
+        New-Item -Path C:\Temp -ItemType Directory -Force
+      register: pasta
 
-        $saida = @()
+    - debug:
+        var: pasta.stdout
 
-        foreach ($m in $membros)
-        {
-            $saida += "$($m.Name) ; $($m.ObjectClass)"
-        }
+    - name: Criar arquivo de teste
+      ansible.windows.win_shell: |
+        "Teste AWX $(Get-Date)" | Out-File C:\Temp\adm.txt -Encoding UTF8 -Force
+      register: arquivo
 
-        $saida | Out-File C:\Temp\adm.txt -Encoding UTF8
+    - debug:
+        var: arquivo.stdout
 
-        $saida
-      register: administradores
+    - name: Validar arquivo
+      ansible.windows.win_shell: |
+        Test-Path C:\Temp\adm.txt
+      register: validacao
 
-    - name: Mostrar administradores encontrados
-      debug:
-        var: administradores.stdout_lines
+    - debug:
+        var: validacao.stdout
