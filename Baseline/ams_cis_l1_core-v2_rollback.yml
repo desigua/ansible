@@ -1,0 +1,386 @@
+---
+# ROLLBACK do ams_cis_l1_core-v2.yml — MODO HÍBRIDO
+#
+# ATENÇÃO — LEIA ANTES DE RODAR:
+# Se você rodou ams_cis_l1_core-v2_backup.yml ANTES do hardening, este
+# playbook restaura senha/lockout e auditoria a partir do estado REAL
+# capturado (secedit/auditpol) e o Spooler ao estado exato de antes.
+# Se não existir backup no host, ele cai para os valores de PADRÃO DE
+# FÁBRICA do Windows (fallback abaixo), avisando no log.
+#
+# Firewall e Microsoft Defender continuam com rollback DESLIGADO por
+# padrão (rb_disable_firewall / rb_disable_defender = false), porque
+# reverter esses dois significa reintroduzir uma vulnerabilidade. Só
+# habilite com uma justificativa de mudança aprovada.
+
+- name: AMS CIS L1 Core - Rollback (Windows Server)
+  hosts: all
+  gather_facts: false
+
+  collections:
+    - ansible.windows
+    - community.windows
+
+  vars:
+
+    ams_backup_dir: 'C:\ProgramData\ams_cis_backup'
+
+    ##############################################
+    # FALLBACK - só usado se não houver backup real no host
+    # (padrão de fábrica do Windows; ajuste se souber o valor anterior)
+    ##############################################
+
+    rb_password_history_size: 0
+    rb_maximum_password_age: 42
+    rb_minimum_password_length: 0
+    rb_password_complexity: 0
+
+    rb_lockout_bad_count: 0
+    rb_lockout_duration: 30
+    rb_reset_lockout_count: 30
+
+    ams_audit_subcategories:
+      - Logon
+      - Logoff
+      - Account Lockout
+      - User Account Management
+      - Security Group Management
+      - Audit Policy Change
+      - Sensitive Privilege Use
+      - Process Creation
+
+    ##############################################
+    # GUARDAS DE SEGURANÇA
+    ##############################################
+
+    rb_disable_firewall: false
+    rb_disable_defender: false
+
+  pre_tasks:
+
+    #################################################
+    # DETECT DOMAIN MEMBERSHIP
+    #################################################
+
+    - name: Detectar participação em domínio
+      ansible.windows.win_powershell:
+        script: |
+          $Computer = Get-CimInstance Win32_ComputerSystem
+
+          [PSCustomObject]@{
+              ComputerName = $env:COMPUTERNAME
+              Domain       = $Computer.Domain
+              PartOfDomain = $Computer.PartOfDomain
+          } | ConvertTo-Json -Compress
+      register: domain_info
+
+    - name: Converter informações do domínio
+      ansible.builtin.set_fact:
+        ams_domain_info: "{{ domain_info.output[0] | from_json }}"
+
+    - name: Definir variável de domínio
+      ansible.builtin.set_fact:
+        is_domain_member: "{{ ams_domain_info.PartOfDomain | bool }}"
+
+    #################################################
+    # VERIFICAR QUAIS BACKUPS EXISTEM NO HOST
+    #################################################
+
+    - name: Verificar backup do secedit (senha/lockout)
+      ansible.windows.win_stat:
+        path: "{{ ams_backup_dir }}\\secpol.cfg"
+      register: secpol_backup
+
+    - name: Verificar backup do auditpol (auditoria)
+      ansible.windows.win_stat:
+        path: "{{ ams_backup_dir }}\\auditpol.csv"
+      register: auditpol_backup
+
+    - name: Verificar backup do Spooler
+      ansible.windows.win_stat:
+        path: "{{ ams_backup_dir }}\\spooler.json"
+      register: spooler_backup_file
+
+    - name: Ler estado anterior do Spooler (se houver backup)
+      ansible.windows.win_shell: "Get-Content '{{ ams_backup_dir }}\\spooler.json' -Raw"
+      register: spooler_backup_raw
+      when: spooler_backup_file.stat.exists
+
+    - name: Exibir contexto do servidor
+      ansible.builtin.debug:
+        msg:
+          - "Servidor: {{ ams_domain_info.ComputerName }}"
+          - "Ingressado em domínio: {{ is_domain_member }}"
+          - "Backup secedit encontrado: {{ secpol_backup.stat.exists }}"
+          - "Backup auditpol encontrado: {{ auditpol_backup.stat.exists }}"
+          - "Backup Spooler encontrado: {{ spooler_backup_file.stat.exists }}"
+          - "Rollback de Firewall habilitado: {{ rb_disable_firewall }}"
+          - "Rollback de Defender habilitado: {{ rb_disable_defender }}"
+
+  tasks:
+
+    #################################################
+    # PASSWORD POLICY + ACCOUNT LOCKOUT
+    # Preferência 1: restaurar secedit inteiro (estado real anterior)
+    # Preferência 2 (fallback): reverter cada chave para o padrão de
+    #                           fábrica do Windows
+    #################################################
+
+    - name: Restaurar política de segurança local a partir do backup real
+      ansible.windows.win_shell: |
+        secedit /configure /db C:\Windows\security\local.sdb /cfg "{{ ams_backup_dir }}\secpol.cfg" /overwrite /log "{{ ams_backup_dir }}\secpol_restore.log"
+      when: secpol_backup.stat.exists
+      tags:
+        - password_policy
+        - account_lockout
+        - cis_l1_rollback
+
+    - block:
+
+        - name: "[Fallback] Password History"
+          community.windows.win_security_policy:
+            section: System Access
+            key: PasswordHistorySize
+            value: "{{ rb_password_history_size }}"
+
+        - name: "[Fallback] Maximum Password Age"
+          community.windows.win_security_policy:
+            section: System Access
+            key: MaximumPasswordAge
+            value: "{{ rb_maximum_password_age }}"
+
+        - name: "[Fallback] Minimum Password Length"
+          community.windows.win_security_policy:
+            section: System Access
+            key: MinimumPasswordLength
+            value: "{{ rb_minimum_password_length }}"
+
+        - name: "[Fallback] Password Complexity"
+          community.windows.win_security_policy:
+            section: System Access
+            key: PasswordComplexity
+            value: "{{ rb_password_complexity }}"
+
+        - name: "[Fallback] Account Lockout Threshold"
+          community.windows.win_security_policy:
+            section: System Access
+            key: LockoutBadCount
+            value: "{{ rb_lockout_bad_count }}"
+
+        - name: "[Fallback] Account Lockout Duration"
+          community.windows.win_security_policy:
+            section: System Access
+            key: LockoutDuration
+            value: "{{ rb_lockout_duration }}"
+
+        - name: "[Fallback] Reset Lockout Counter"
+          community.windows.win_security_policy:
+            section: System Access
+            key: ResetLockoutCount
+            value: "{{ rb_reset_lockout_count }}"
+
+      when: not secpol_backup.stat.exists and not is_domain_member
+      tags:
+        - password_policy
+        - account_lockout
+        - cis_l1_rollback
+
+    - name: Aviso - sem backup, usando padrão de fábrica
+      ansible.builtin.debug:
+        msg: "Nenhum backup em {{ ams_backup_dir }}\\secpol.cfg — restaurado para o padrão de fábrica do Windows, não para o valor real anterior."
+      when: not secpol_backup.stat.exists
+      tags:
+        - password_policy
+        - account_lockout
+        - cis_l1_rollback
+
+    #################################################
+    # AUDIT POLICY
+    # Preferência 1: restaurar auditpol inteiro (estado real anterior)
+    # Preferência 2 (fallback): desligar success/failure das
+    #                           subcategorias que o hardening ligou
+    #################################################
+
+    - name: Restaurar política de auditoria a partir do backup real
+      ansible.windows.win_shell: |
+        auditpol /restore /file:"{{ ams_backup_dir }}\auditpol.csv"
+      when: auditpol_backup.stat.exists
+      tags:
+        - audit_policy
+        - cis_l1_rollback
+
+    - name: "[Fallback] Desligar Auditoria Avançada"
+      ansible.windows.win_powershell:
+        script: |
+          auditpol /set /subcategory:"{{ item }}" /success:disable /failure:disable
+      loop: "{{ ams_audit_subcategories }}"
+      when: not auditpol_backup.stat.exists
+      tags:
+        - audit_policy
+        - cis_l1_rollback
+
+    #################################################
+    # WINDOWS FIREWALL - ROLLBACK (GUARDADO)
+    #################################################
+
+    - name: Desabilitar Firewall (rollback)
+      ansible.windows.win_powershell:
+        script: |
+          Set-NetFirewallProfile `
+            -Profile Domain,Private,Public `
+            -Enabled False
+      when: rb_disable_firewall | bool
+      tags:
+        - firewall
+        - cis_l1_rollback
+
+    - name: Aviso - Firewall NÃO revertido
+      ansible.builtin.debug:
+        msg: "rb_disable_firewall=false: Firewall permanece habilitado (comportamento recomendado)."
+      when: not (rb_disable_firewall | bool)
+      tags:
+        - firewall
+        - cis_l1_rollback
+
+    #################################################
+    # MICROSOFT DEFENDER - ROLLBACK (GUARDADO)
+    #################################################
+
+    - name: Desabilitar Realtime Protection (rollback)
+      ansible.windows.win_powershell:
+        script: |
+          if (Get-Command Set-MpPreference -ErrorAction SilentlyContinue) {
+              Set-MpPreference -DisableRealtimeMonitoring $true
+          }
+      when: rb_disable_defender | bool
+      tags:
+        - defender
+        - cis_l1_rollback
+
+    - name: Reverter Cloud Protection para Basic (rollback)
+      ansible.windows.win_powershell:
+        script: |
+          if (Get-Command Set-MpPreference -ErrorAction SilentlyContinue) {
+              Set-MpPreference -MAPSReporting Basic
+          }
+      when: rb_disable_defender | bool
+      tags:
+        - defender
+        - cis_l1_rollback
+
+    - name: Reverter Sample Submission (rollback)
+      ansible.windows.win_powershell:
+        script: |
+          if (Get-Command Set-MpPreference -ErrorAction SilentlyContinue) {
+              Set-MpPreference -SubmitSamplesConsent 0
+          }
+      when: rb_disable_defender | bool
+      tags:
+        - defender
+        - cis_l1_rollback
+
+    - name: Aviso - Defender NÃO revertido
+      ansible.builtin.debug:
+        msg: "rb_disable_defender=false: Proteções do Defender permanecem habilitadas (comportamento recomendado)."
+      when: not (rb_disable_defender | bool)
+      tags:
+        - defender
+        - cis_l1_rollback
+
+    #################################################
+    # POWERSHELL LOGGING - ROLLBACK
+    #################################################
+
+    - name: Disable Module Logging (rollback)
+      ansible.windows.win_regedit:
+        path: HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell\ModuleLogging
+        name: EnableModuleLogging
+        data: 0
+        type: dword
+      tags:
+        - powershell_logging
+        - cis_l1_rollback
+
+    - name: Remover lista de módulos monitorados (rollback)
+      ansible.windows.win_regedit:
+        path: HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell\ModuleLogging\ModuleNames
+        name: "*"
+        state: absent
+      tags:
+        - powershell_logging
+        - cis_l1_rollback
+
+    - name: Disable Script Block Logging (rollback)
+      ansible.windows.win_regedit:
+        path: HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell\ScriptBlockLogging
+        name: EnableScriptBlockLogging
+        data: 0
+        type: dword
+      tags:
+        - powershell_logging
+        - cis_l1_rollback
+
+    - name: Disable Transcription (rollback)
+      ansible.windows.win_regedit:
+        path: HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell\Transcription
+        name: EnableTranscripting
+        data: 0
+        type: dword
+      tags:
+        - powershell_logging
+        - cis_l1_rollback
+
+    #################################################
+    # IPv6 - ROLLBACK
+    #################################################
+
+    - name: Reabilitar IPv6 em todos os adaptadores de rede (rollback)
+      ansible.windows.win_regedit:
+        path: HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip6\Parameters
+        name: DisabledComponents
+        state: absent
+      tags:
+        - ipv6
+        - cis_l1_rollback
+
+    #################################################
+    # PRINT SPOOLER - ROLLBACK
+    # Preferência 1: restaurar o estado EXATO de antes (running/stopped
+    #                + start_mode), a partir do backup real.
+    # Preferência 2 (fallback): manter desabilitado (comportamento
+    #                seguro), já que reativar reabre uma superfície de
+    #                ataque histórica (ex.: PrintNightmare) e sem saber
+    #                o estado real anterior é arriscado assumir "auto".
+    #################################################
+
+    - name: Restaurar Spooler ao estado exato de antes do hardening
+      ansible.windows.win_service:
+        name: Spooler
+        state: "{{ (spooler_backup_raw.stdout | from_json).state }}"
+        start_mode: "{{ (spooler_backup_raw.stdout | from_json).start_mode }}"
+      when: spooler_backup_file.stat.exists
+      tags:
+        - spooler
+        - cis_l1_rollback
+
+    - name: Aviso - sem backup do Spooler, mantendo desabilitado
+      ansible.builtin.debug:
+        msg: "Nenhum backup em {{ ams_backup_dir }}\\spooler.json — Spooler permanece desabilitado (comportamento seguro por padrão)."
+      when: not spooler_backup_file.stat.exists
+      tags:
+        - spooler
+        - cis_l1_rollback
+
+  post_tasks:
+
+    - name: Resumo do Rollback CIS
+      ansible.builtin.debug:
+        msg:
+          - "Servidor: {{ inventory_hostname }}"
+          - "Password/Lockout: {{ 'restaurado do backup real' if secpol_backup.stat.exists else 'padrão de fábrica (fallback)' }}"
+          - "Auditoria: {{ 'restaurada do backup real' if auditpol_backup.stat.exists else 'desabilitada (fallback)' }}"
+          - "Spooler: {{ 'restaurado do backup real' if spooler_backup_file.stat.exists else 'mantido desabilitado (fallback)' }}"
+          - "Firewall revertido: {{ rb_disable_firewall }}"
+          - "Defender revertido: {{ rb_disable_defender }}"
+          - "PowerShell Logging revertido"
+          - "IPv6 reabilitado (requer reboot)"

@@ -1,0 +1,86 @@
+---
+# BACKUP de estado real, ANTES do hardening.
+#
+# Rode este playbook uma vez, antes de aplicar o ams_cis_l1_core-v2.yml,
+# para permitir que o rollback restaure o valor REAL anterior do
+# ambiente (não um "padrão de fábrica" genérico).
+#
+# Captura:
+#   - secedit  -> política de segurança local inteira (senha + lockout)
+#   - auditpol -> política de auditoria inteira (todas as subcategorias)
+#   - Spooler  -> estado atual (rodando/parado) e modo de start
+#
+# Os arquivos ficam em C:\ProgramData\ams_cis_backup no próprio host.
+# Usa "creates" no secedit/auditpol para nunca sobrescrever um backup
+# já existente (garante que ele sempre representa o estado ANTES do
+# primeiro hardening, mesmo que este playbook rode de novo por engano).
+
+- name: AMS CIS L1 Core - Backup de estado (pré-hardening)
+  hosts: all
+  gather_facts: false
+
+  collections:
+    - ansible.windows
+    - community.windows
+
+  vars:
+    ams_backup_dir: 'C:\ProgramData\ams_cis_backup'
+
+  tasks:
+
+    - name: Garantir diretório de backup
+      ansible.windows.win_file:
+        path: "{{ ams_backup_dir }}"
+        state: directory
+
+    #################################################
+    # POLÍTICA DE SEGURANÇA LOCAL (senha + lockout + demais)
+    #################################################
+
+    - name: Backup da política de segurança local (secedit)
+      ansible.windows.win_shell: |
+        secedit /export /cfg "{{ ams_backup_dir }}\secpol.cfg"
+      args:
+        creates: "{{ ams_backup_dir }}\\secpol.cfg"
+
+    #################################################
+    # POLÍTICA DE AUDITORIA
+    #################################################
+
+    - name: Backup da política de auditoria (auditpol)
+      ansible.windows.win_shell: |
+        auditpol /backup /file:"{{ ams_backup_dir }}\auditpol.csv"
+      args:
+        creates: "{{ ams_backup_dir }}\\auditpol.csv"
+
+    #################################################
+    # PRINT SPOOLER - estado atual (running/stopped, start_mode)
+    #################################################
+
+    - name: Verificar se já existe backup do Spooler
+      ansible.windows.win_stat:
+        path: "{{ ams_backup_dir }}\\spooler.json"
+      register: spooler_backup_exists
+
+    - name: Consultar estado atual do Spooler
+      ansible.windows.win_service_info:
+        name: Spooler
+      register: spooler_info
+      when: not spooler_backup_exists.stat.exists
+
+    - name: Persistir estado atual do Spooler em JSON
+      ansible.windows.win_copy:
+        content: |
+          {
+            "state": "{{ spooler_info.services[0].state }}",
+            "start_mode": "{{ spooler_info.services[0].start_mode }}"
+          }
+        dest: "{{ ams_backup_dir }}\\spooler.json"
+      when: not spooler_backup_exists.stat.exists
+
+    - name: Exibir resumo do backup
+      ansible.builtin.debug:
+        msg:
+          - "Backup salvo em {{ ams_backup_dir }} no host {{ inventory_hostname }}"
+          - "Rode ams_cis_l1_core-v2.yml em seguida para aplicar o hardening."
+          - "Em caso de necessidade de rollback, use ams_cis_l1_core-v2_rollback.yml"

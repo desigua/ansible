@@ -1,0 +1,76 @@
+---
+# Versão simplificada: coleta os administradores locais e grava o TXT
+# DIRETO NO PRÓPRIO SERVIDOR WINDOWS (C:\temp), em vez de salvar no
+# controlador. Cria a pasta C:\temp se ela não existir.
+
+- name: Coletar administradores locais e salvar evidência em C:\temp
+  hosts: all
+  gather_facts: false
+
+  collections:
+    - ansible.windows
+
+  vars:
+    ams_temp_dir: 'C:\temp'
+    ams_arquivo_saida: 'C:\temp\administradores_locais.txt'
+
+  tasks:
+
+    - name: Garantir que a pasta C:\temp existe no servidor
+      ansible.windows.win_file:
+        path: "{{ ams_temp_dir }}"
+        state: directory
+
+    - name: Consultar administradores locais e dados do servidor
+      # Usa Get-LocalGroupMember para listar todos os membros do grupo
+      # "Administrators" local (contas locais e de domínio adicionadas
+      # ao grupo). Também captura hostname e data/hora do próprio
+      # servidor, para evidenciar de onde e quando veio a coleta.
+      ansible.windows.win_powershell:
+        script: |
+          $membros = Get-LocalGroupMember -Group "Administrators" |
+            Select-Object Name, PrincipalSource, ObjectClass
+
+          [PSCustomObject]@{
+              ComputerName    = $env:COMPUTERNAME
+              DataColeta      = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
+              Administradores = $membros
+          } | ConvertTo-Json -Compress -Depth 4
+      register: ams_coleta_raw
+
+    - name: Converter saída JSON em variável utilizável pelo Ansible
+      ansible.builtin.set_fact:
+        ams_coleta: "{{ ams_coleta_raw.output[0] | from_json }}"
+
+    - name: Normalizar para lista (caso só exista 1 administrador)
+      # Quando há apenas um membro, o ConvertTo-Json retorna um objeto
+      # único em vez de uma lista — este passo garante que o loop do
+      # template abaixo sempre funcione.
+      ansible.builtin.set_fact:
+        ams_admins_local: "{{ [ams_coleta.Administradores] if ams_coleta.Administradores is mapping else ams_coleta.Administradores }}"
+
+    - name: Exibir administradores encontrados no output do job
+      ansible.builtin.debug:
+        msg: "{{ ams_coleta.ComputerName }}: {{ ams_admins_local | map(attribute='Name') | list }}"
+
+    - name: Gravar evidência em TXT no próprio servidor (C:\temp)
+      ansible.windows.win_copy:
+        dest: "{{ ams_arquivo_saida }}"
+        content: |
+          Servidor: {{ ams_coleta.ComputerName }}
+          Data da coleta: {{ ams_coleta.DataColeta }}
+          Total de administradores locais: {{ ams_admins_local | length }}
+
+          Administradores locais encontrados:
+          {% for admin in ams_admins_local %}
+          - {{ admin.Name }} ({{ admin.PrincipalSource }} / {{ admin.ObjectClass }})
+          {% endfor %}
+
+  post_tasks:
+
+    - name: Resumo da coleta
+      ansible.builtin.debug:
+        msg:
+          - "Servidor: {{ ams_coleta.ComputerName }}"
+          - "Total de administradores locais encontrados: {{ ams_admins_local | length }}"
+          - "Evidência salva em: {{ ams_arquivo_saida }} (no próprio servidor)"
