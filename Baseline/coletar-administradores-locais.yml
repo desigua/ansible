@@ -1,30 +1,39 @@
 ---
-- name: Teste de escrita
+- name: Diagnostico Windows
   hosts: windows
   gather_facts: false
 
   tasks:
 
-    - name: Criar C:\Temp
+    - name: Quem está executando
+      ansible.windows.win_shell: whoami
+      register: who
+
+    - debug:
+        var: who.stdout
+
+    - name: Criar pasta
       ansible.windows.win_shell: |
         New-Item -Path C:\Temp -ItemType Directory -Force
+        Test-Path C:\Temp
       register: pasta
 
     - debug:
-        var: pasta.stdout
+        var: pasta.stdout_lines
 
-    - name: Criar arquivo de teste
+    - name: Criar arquivo
       ansible.windows.win_shell: |
-        "Teste AWX $(Get-Date)" | Out-File C:\Temp\adm.txt -Encoding UTF8 -Force
+        "Servidor: $env:COMPUTERNAME" | Out-File C:\Temp\adm.txt -Encoding UTF8 -Force
+        Test-Path C:\Temp\adm.txt
       register: arquivo
 
     - debug:
-        var: arquivo.stdout
+        var: arquivo.stdout_lines
 
-    - name: Validar arquivo
+    - name: Exibir conteúdo
       ansible.windows.win_shell: |
-        Test-Path C:\Temp\adm.txt
-      register: validacao
+        Get-Content C:\Temp\adm.txt
+      register: conteudo
 
     - debug:
-        var: validacao.stdout
+        var: conteudo.stdout_lines
