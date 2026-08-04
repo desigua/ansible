@@ -12,8 +12,10 @@
 
     - name: Gerar relatório de administradores locais
       ansible.windows.win_shell: |
+
         $hostname = hostname
 
+        # Administradores permitidos
         $permitidos = "mabreu","mabra","administrator"
 
         $saida = @()
@@ -37,7 +39,9 @@
 
                 $saida += "$($admin.Name) [$($admin.ObjectClass)]"
 
-                $usuario = $admin.Name.Substring($admin.Name.LastIndexOf('\') + 1).ToLower()
+                $usuario = $admin.Name
+                $usuario = $usuario.Substring($usuario.LastIndexOf('\') + 1)
+                $usuario = $usuario.ToLower()
 
                 $encontrados += $usuario
 
@@ -51,7 +55,7 @@
 
             foreach ($permitido in $permitidos)
             {
-                if ($permitido.ToLower() -notin $encontrados)
+                if ($permitido -notin $encontrados)
                 {
                     $faltando += $permitido
                 }
@@ -63,7 +67,6 @@
             $saida += ""
 
             $saida += "ADMINISTRADORES PERMITIDOS:"
-
             foreach ($permitido in $permitidos)
             {
                 $saida += " - $permitido"
