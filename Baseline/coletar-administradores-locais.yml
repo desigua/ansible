@@ -1,4 +1,4 @@
-  ---
+---
 - name: Coletar administradores locais
   hosts: all
   gather_facts: false
@@ -138,4 +138,3 @@
     - name: Exibir resultado no AWX
       debug:
         var: resultado.stdout_lines
-  
