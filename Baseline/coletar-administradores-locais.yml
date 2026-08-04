@@ -16,7 +16,7 @@
         $hostname = hostname
 
         # Administradores permitidos
-        $permitidos = "mabreu","mabra","administrator"
+        $permitidos = "mabreu","mabra"
 
         $saida = @()
 
