@@ -4,7 +4,6 @@
   gather_facts: false
 
   vars:
-
     administradores_permitidos:
       - mabreu
 
@@ -20,11 +19,11 @@
 
         $hostname = hostname
 
-        $permitidos = @(
-        {% for adm in administradores_permitidos %}
-        "{{ adm }}"
-        {% endfor %}
-        )
+        $admins = Get-LocalGroupMember -Group "Administrators" | Sort-Object Name
+
+        $permitidos = @("mabreu")
+
+        $encontrados = @()
 
         $saida = @()
 
@@ -36,97 +35,76 @@
         $saida += "ADMINISTRADORES LOCAIS:"
         $saida += ""
 
-        $encontrados = @()
+        foreach ($admin in $admins)
+        {
+            $saida += "$($admin.Name) [$($admin.ObjectClass)]"
 
-        try {
-
-            $admins = Get-LocalGroupMember -Group "Administrators" | Sort-Object Name
-
-            foreach ($admin in $admins) {
-
-                $saida += "$($admin.Name) [$($admin.ObjectClass)]"
-
-                $usuario = ($admin.Name.Split('\')[-1]).ToLower()
-                $encontrados += $usuario
-            }
-
-            $faltando = @()
-            $extras = @()
-
-            foreach ($permitido in $permitidos)
-            {
-                if ($permitido.ToLower() -notin $encontrados)
-                {
-                    $faltando += $permitido
-                }
-            }
-
-            foreach ($usuario in $encontrados)
-            {
-                if ($usuario -notin ($permitidos | ForEach-Object { $_.ToLower() }))
-                {
-                    $extras += $usuario
-                }
-            }
-
-            $saida += ""
-            $saida += "VALIDACAO:"
-            $saida += "=========="
-            $saida += ""
-
-            $saida += "ADMINISTRADORES PERMITIDOS:"
-            foreach ($permitido in $permitidos)
-            {
-                $saida += " - $permitido"
-            }
-
-            $saida += ""
-
-            if ($faltando.Count -eq 0)
-            {
-                $saida += "CONTAS FALTANDO: NENHUMA"
-            }
-            else
-            {
-                $saida += "CONTAS FALTANDO:"
-                foreach ($item in $faltando)
-                {
-                    $saida += " - $item"
-                }
-            }
-
-            $saida += ""
-
-            if ($extras.Count -eq 0)
-            {
-                $saida += "CONTAS EXTRAS: NENHUMA"
-            }
-            else
-            {
-                $saida += "CONTAS EXTRAS:"
-                foreach ($item in $extras)
-                {
-                    $saida += " - $item"
-                }
-            }
-
-            $saida += ""
-
-            if (($faltando.Count -eq 0) -and ($extras.Count -eq 0))
-            {
-                $saida += "STATUS: COMPLIANT"
-            }
-            else
-            {
-                $saida += "STATUS: NON-COMPLIANT"
-            }
-
+            $usuario = $admin.Name.Split('\')[-1].ToLower()
+            $encontrados += $usuario
         }
-        catch {
 
-            $saida += ""
-            $saida += "ERRO AO CONSULTAR ADMINISTRADORES:"
-            $saida += $_.Exception.Message
+        $faltando = @()
+
+        foreach ($permitido in $permitidos)
+        {
+            if ($permitido -notin $encontrados)
+            {
+                $faltando += $permitido
+            }
+        }
+
+        $extras = @()
+
+        foreach ($usuario in $encontrados)
+        {
+            if ($usuario -notin $permitidos)
+            {
+                $extras += $usuario
+            }
+        }
+
+        $saida += ""
+        $saida += "VALIDACAO"
+        $saida += "=========="
+        $saida += ""
+
+        if ($faltando.Count -eq 0)
+        {
+            $saida += "CONTAS FALTANDO: NENHUMA"
+        }
+        else
+        {
+            $saida += "CONTAS FALTANDO:"
+            foreach ($f in $faltando)
+            {
+                $saida += " - $f"
+            }
+        }
+
+        $saida += ""
+
+        if ($extras.Count -eq 0)
+        {
+            $saida += "CONTAS EXTRAS: NENHUMA"
+        }
+        else
+        {
+            $saida += "CONTAS EXTRAS:"
+            foreach ($e in $extras)
+            {
+                $saida += " - $e"
+            }
+        }
+
+        $saida += ""
+
+        if (($faltando.Count -eq 0) -and ($extras.Count -eq 0))
+        {
+            $saida += "STATUS: COMPLIANT"
+        }
+        else
+        {
+            $saida += "STATUS: NON-COMPLIANT"
         }
 
         $saida | Out-File -FilePath C:\Temp\adm.txt -Encoding UTF8 -Force
