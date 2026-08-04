@@ -3,116 +3,37 @@
   hosts: all
   gather_facts: false
 
-  vars:
-    administradores_permitidos:
-      - mabreu
-
   tasks:
 
-    - name: Criar pasta C:\Temp
+    - name: Criar pasta C Temp
       ansible.windows.win_file:
         path: C:\Temp
         state: directory
 
-    - name: Gerar relatório de administradores locais
+    - name: Gerar relatorio
       ansible.windows.win_shell: |
-
         $hostname = hostname
 
         $admins = Get-LocalGroupMember -Group "Administrators" | Sort-Object Name
-
-        $permitidos = @("mabreu")
-
-        $encontrados = @()
 
         $saida = @()
 
         $saida += "========================================="
         $saida += "Servidor: $hostname"
-        $saida += "Data: $(Get-Date)"
         $saida += "========================================="
-        $saida += ""
-        $saida += "ADMINISTRADORES LOCAIS:"
         $saida += ""
 
         foreach ($admin in $admins)
         {
             $saida += "$($admin.Name) [$($admin.ObjectClass)]"
-
-            $usuario = $admin.Name.Split('\')[-1].ToLower()
-            $encontrados += $usuario
         }
 
-        $faltando = @()
-
-        foreach ($permitido in $permitidos)
-        {
-            if ($permitido -notin $encontrados)
-            {
-                $faltando += $permitido
-            }
-        }
-
-        $extras = @()
-
-        foreach ($usuario in $encontrados)
-        {
-            if ($usuario -notin $permitidos)
-            {
-                $extras += $usuario
-            }
-        }
-
-        $saida += ""
-        $saida += "VALIDACAO"
-        $saida += "=========="
-        $saida += ""
-
-        if ($faltando.Count -eq 0)
-        {
-            $saida += "CONTAS FALTANDO: NENHUMA"
-        }
-        else
-        {
-            $saida += "CONTAS FALTANDO:"
-            foreach ($f in $faltando)
-            {
-                $saida += " - $f"
-            }
-        }
-
-        $saida += ""
-
-        if ($extras.Count -eq 0)
-        {
-            $saida += "CONTAS EXTRAS: NENHUMA"
-        }
-        else
-        {
-            $saida += "CONTAS EXTRAS:"
-            foreach ($e in $extras)
-            {
-                $saida += " - $e"
-            }
-        }
-
-        $saida += ""
-
-        if (($faltando.Count -eq 0) -and ($extras.Count -eq 0))
-        {
-            $saida += "STATUS: COMPLIANT"
-        }
-        else
-        {
-            $saida += "STATUS: NON-COMPLIANT"
-        }
-
-        $saida | Out-File -FilePath C:\Temp\adm.txt -Encoding UTF8 -Force
+        $saida | Out-File C:\Temp\adm.txt -Encoding UTF8 -Force
 
         Get-Content C:\Temp\adm.txt
 
       register: resultado
 
-    - name: Exibir resultado no AWX
+    - name: Mostrar resultado
       debug:
         var: resultado.stdout_lines
