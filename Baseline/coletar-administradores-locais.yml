@@ -16,12 +16,9 @@
 
     - name: Gerar relatório de administradores locais
       ansible.windows.win_shell: |
-
         $hostname = hostname
 
-        $permitidos = @(
-          "mabreu"
-        )
+        $admins = Get-LocalGroupMember -Group "Administrators" | Sort-Object Name
 
         $saida = @()
 
@@ -33,92 +30,59 @@
         $saida += "ADMINISTRADORES LOCAIS:"
         $saida += ""
 
-        try
+        $encontrados = @()
+
+        foreach ($admin in $admins)
         {
-            $admins = Get-LocalGroupMember -Group "Administrators" | Sort-Object Name
+            $saida += "$($admin.Name) [$($admin.ObjectClass)]"
 
-            $encontrados = @()
-
-            foreach ($admin in $admins)
-            {
-                $saida += "$($admin.Name) [$($admin.ObjectClass)]"
-
-                $usuario = $admin.Name.Split('\')[-1].ToLower()
-                $encontrados += $usuario
-            }
-
-            $faltando = @()
-
-            foreach ($permitido in $permitidos)
-            {
-                if ($permitido.ToLower() -notin $encontrados)
-                {
-                    $faltando += $permitido
-                }
-            }
-
-            $extras = @()
-
-            foreach ($usuario in $encontrados)
-            {
-                if ($usuario -notin $permitidos)
-                {
-                    $extras += $usuario
-                }
-            }
-
-            $saida += ""
-            $saida += "VALIDACAO:"
-            $saida += "=========="
-            $saida += ""
-
-            if ($faltando.Count -eq 0)
-            {
-                $saida += "CONTAS FALTANDO: NENHUMA"
-            }
-            else
-            {
-                $saida += "CONTAS FALTANDO:"
-                foreach ($item in $faltando)
-                {
-                    $saida += " - $item"
-                }
-            }
-
-            $saida += ""
-
-            if ($extras.Count -eq 0)
-            {
-                $saida += "CONTAS EXTRAS: NENHUMA"
-            }
-            else
-            {
-                $saida += "CONTAS EXTRAS:"
-                foreach ($item in $extras)
-                {
-                    $saida += " - $item"
-                }
-            }
-
-            $saida += ""
-
-            if (($faltando.Count -eq 0) -and ($extras.Count -eq 0))
-            {
-                $saida += "STATUS: COMPLIANT"
-            }
-            else
-            {
-                $saida += "STATUS: NON-COMPLIANT"
-            }
-        }
-        catch
-        {
-            $saida += ""
-            $saida += "ERRO AO CONSULTAR ADMINISTRADORES:"
-            $saida += $_.Exception.Message
+            $usuario = $admin.Name.Split('\')[-1].ToLower()
+            $encontrados += $usuario
         }
 
-        $saida | Out-File -FilePath C:\Temp\adm.txt -Encoding UTF8 -Force
+        $saida += ""
+        $saida += "VALIDACAO:"
+        $saida += ""
+
+        if ($encontrados -contains "mabreu")
+        {
+            $saida += "MABREU: OK"
+        }
+        else
+        {
+            $saida += "MABREU: FALTANDO"
+        }
+
+        $extras = @()
+
+        foreach ($usuario in $encontrados)
+        {
+            if ($usuario -ne "mabreu")
+            {
+                $extras += $usuario
+            }
+        }
+
+        if ($extras.Count -eq 0)
+        {
+            $saida += "ADMINISTRADORES EXTRAS: NENHUM"
+            $saida += "STATUS: COMPLIANT"
+        }
+        else
+        {
+            $saida += ""
+            $saida += "ADMINISTRADORES EXTRAS:"
+
+            foreach ($extra in $extras)
+            {
+                $saida += " - $extra"
+            }
+
+            $saida += ""
+            $saida += "STATUS: NON-COMPLIANT"
+        }
+
+        $saida | Out-File C:\Temp\adm.txt -Encoding UTF8 -Force
 
         Get-Content C:\Temp\adm.txt
 
