@@ -13,12 +13,18 @@
     - name: Criar pasta de relatórios no controlador (se não existir)
       # Executa em localhost (delegate_to) porque é o controlador quem
       # vai armazenar os arquivos de saída, não os servidores Windows.
+      # ansible_connection: local é OBRIGATÓRIO aqui: sem isso, a task
+      # herda ansible_connection=winrm/porta 5985 do host Windows atual
+      # e tenta abrir WinRM contra "localhost" (o próprio container da
+      # Execution Environment), resultando em UNREACHABLE.
       ansible.builtin.file:
         path: "{{ ams_relatorio_dir }}"
         state: directory
         mode: "0755"
       delegate_to: localhost
       run_once: true
+      vars:
+        ansible_connection: local
 
     - name: Consultar membros do grupo Administrators local
       # Usa o cmdlet Get-LocalGroupMember para listar todos os membros
@@ -54,6 +60,7 @@
       # Grava um arquivo de texto no controlador com a lista de
       # administradores locais de cada host, nome do arquivo baseado
       # no nome do inventário (facilita auditoria posterior).
+      # Mesmo motivo do ansible_connection: local da task acima.
       ansible.builtin.copy:
         dest: "{{ ams_relatorio_dir }}/{{ inventory_hostname }}.txt"
         content: |
@@ -64,6 +71,8 @@
           - {{ admin.Name }} ({{ admin.PrincipalSource }} / {{ admin.ObjectClass }})
           {% endfor %}
       delegate_to: localhost
+      vars:
+        ansible_connection: local
 
     - name: Consolidar todos os servidores em um único CSV
       # Adiciona uma linha por administrador/servidor em um CSV
@@ -78,6 +87,8 @@
       loop: "{{ ams_admins_local }}"
       delegate_to: localhost
       throttle: 1
+      vars:
+        ansible_connection: local
 
   post_tasks:
 
