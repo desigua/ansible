@@ -23,10 +23,44 @@
         $saida += "========================================="
         $saida += ""
 
-        foreach ($admin in $admins)
-        {
-            $saida += "$($admin.Name) [$($admin.ObjectClass)]"
-        }
+        $permitidos = @("mabreu")
+
+$encontrados = @()
+
+foreach ($admin in $admins)
+{
+    $saida += "$($admin.Name) [$($admin.ObjectClass)]"
+
+    $usuario = $admin.Name.Split('\')[-1].ToLower()
+    $encontrados += $usuario
+}
+
+$extras = $encontrados | Where-Object { $_ -notin $permitidos }
+$faltando = $permitidos | Where-Object { $_ -notin $encontrados }
+
+$saida += ""
+$saida += "VALIDACAO"
+$saida += "=========="
+
+if ($faltando.Count -eq 0)
+{
+    $saida += "CONTAS FALTANDO: NENHUMA"
+}
+else
+{
+    $saida += "CONTAS FALTANDO:"
+    $faltando | ForEach-Object { $saida += " - $_" }
+}
+
+if ($extras.Count -eq 0)
+{
+    $saida += "CONTAS EXTRAS: NENHUMA"
+}
+else
+{
+    $saida += "CONTAS EXTRAS:"
+    $extras | ForEach-Object { $saida += " - $_" }
+}
 
         $saida | Out-File C:\Temp\adm.txt -Encoding UTF8 -Force
 
