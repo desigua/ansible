@@ -1,112 +1,106 @@
----
-- name: Auditoria de Administradores Locais
-  hosts: all
-  gather_facts: false
+$hostname = hostname
 
-  vars:
+$permitidos = @(
+"mabreu"
+)
 
-    administradores_permitidos:
-      - mabreu
+$admins = Get-LocalGroupMember -Group "Administrators"
 
-  tasks:
+$encontrados = @()
 
-    - name: Garantir C:\Temp
-      ansible.windows.win_file:
-        path: C:\Temp
-        state: directory
+foreach ($admin in $admins)
+{
+    $usuario = $admin.Name.Split('\')[-1].ToLower()
+    $encontrados += $usuario
+}
 
-    - name: Obter hostname
-      ansible.windows.win_shell: hostname
-      register: hostname
+$faltando = @()
+$extras = @()
 
-    - name: Obter administradores locais
-      ansible.windows.win_shell: |
-        Get-LocalGroupMember -Group Administrators |
-        Select-Object -ExpandProperty Name
-      register: admins
+foreach ($permitido in $permitidos)
+{
+    if ($permitido.ToLower() -notin $encontrados)
+    {
+        $faltando += $permitido
+    }
+}
 
-    - name: Gerar relatório de conformidade
-      ansible.windows.win_shell: |
+foreach ($usuario in $encontrados)
+{
+    if ($usuario -notin $permitidos)
+    {
+        $extras += $usuario
+    }
+}
 
-        $hostname = "{{ hostname.stdout }}"
-        
-        $esperados = @(
-        {% for adm in administradores_permitidos %}
-        "{{ adm }}",
-        {% endfor %}
-        )
+$saida = @()
 
-        $encontrados = @(
-        {% for adm in admins.stdout_lines %}
-        "{{ adm }}",
-        {% endfor %}
-        )
+$saida += "========================================="
+$saida += "Servidor: $hostname"
+$saida += "Data: $(Get-Date)"
+$saida += "========================================="
+$saida += ""
 
-        $faltando = $esperados | Where-Object { $_ -notin $encontrados }
-        $extras    = $encontrados | Where-Object { $_ -notin $esperados }
+$saida += "ADMINISTRADORES ENCONTRADOS"
+$saida += "---------------------------"
 
-        $saida = @()
+foreach ($usuario in $encontrados)
+{
+    $saida += $usuario
+}
 
-        $saida += "========================================="
-        $saida += "Servidor: $hostname"
-        $saida += "Data: $(Get-Date)"
-        $saida += "========================================="
-        $saida += ""
+$saida += ""
+$saida += "VALIDACAO"
+$saida += "----------"
 
-        $saida += "ADMINISTRADORES ESPERADOS"
-        $saida += "-------------------------"
+if ($faltando.Count -eq 0)
+{
+    $saida += "Conta obrigatoria encontrada: SIM"
+}
+else
+{
+    $saida += "Conta obrigatoria encontrada: NAO"
+}
 
-        foreach ($item in $esperados)
-        {
-            $saida += $item
-        }
+$saida += ""
 
-        $saida += ""
-        $saida += "ADMINISTRADORES ENCONTRADOS"
-        $saida += "---------------------------"
+$saida += "CONTAS FALTANDO"
 
-        foreach ($item in $encontrados)
-        {
-            $saida += $item
-        }
+if ($faltando.Count -eq 0)
+{
+    $saida += "Nenhuma"
+}
+else
+{
+    $faltando | ForEach-Object {
+        $saida += $_
+    }
+}
 
-        $saida += ""
-        $saida += "ADMINISTRADORES FALTANDO"
-        $saida += "------------------------"
+$saida += ""
 
-        if ($faltando.Count -eq 0)
-        {
-            $saida += "Nenhum"
-        }
-        else
-        {
-            $faltando | ForEach-Object { $saida += $_ }
-        }
+$saida += "CONTAS EXTRAS"
 
-        $saida += ""
-        $saida += "ADMINISTRADORES EXTRAS"
-        $saida += "----------------------"
+if ($extras.Count -eq 0)
+{
+    $saida += "Nenhuma"
+}
+else
+{
+    $extras | ForEach-Object {
+        $saida += $_
+    }
+}
 
-        if ($extras.Count -eq 0)
-        {
-            $saida += "Nenhum"
-        }
-        else
-        {
-            $extras | ForEach-Object { $saida += $_ }
-        }
+$saida += ""
 
-        $saida += ""
+if (($faltando.Count -eq 0) -and ($extras.Count -eq 0))
+{
+    $saida += "STATUS: COMPLIANT"
+}
+else
+{
+    $saida += "STATUS: NON-COMPLIANT"
+}
 
-        if (($faltando.Count -eq 0) -and ($extras.Count -eq 0))
-        {
-            $saida += "STATUS: COMPLIANT"
-        }
-        else
-        {
-            $saida += "STATUS: NON-COMPLIANT"
-        }
-
-        $saida | Out-File C:\Temp\adm.txt -Encoding UTF8 -Force
-
-      changed_when: false
+$saida | Out-File C:\Temp\adm.txt -Encoding UTF8 -Force
