@@ -1,0 +1,18 @@
+---
+
+- name: Update Linux System
+  hosts: all
+  tasks: 
+    - name: YUM | Update System
+      yum: name=* state=latest update_cache=yes
+      when: ansible_distribution == "CentOS" or ansible_distribution == "RedHat"
+
+    - name: APT | Update Cache
+      apt: update_cache=yes
+      when: ansible_distribution == "Debian" or ansible_distribution == "Ubuntu"
+
+    - name: APT | Update System
+      apt: name="*" state=latest
+      when: ansible_distribution == "Debian" or ansible_distribution == "Ubuntu"
+
+...
