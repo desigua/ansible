@@ -1,28 +1,25 @@
----
-
 - name: Update Linux System
   hosts: all
-  tasks: 
+  become: false   # impede sudo no Gathering Facts
+
+  tasks:
     - name: YUM | Update System
       yum:
         name: "*"
         state: latest
         update_cache: yes
       when: ansible_distribution in ["CentOS", "RedHat"]
-      become: yes
+      become: true   # sudo apenas aqui
 
     - name: APT | Update Cache
       apt:
         update_cache: yes
       when: ansible_distribution in ["Debian", "Ubuntu"]
-      become: yes
+      become: true   # sudo apenas aqui
 
     - name: APT | Update System
       apt:
         name: "*"
         state: latest
       when: ansible_distribution in ["Debian", "Ubuntu"]
-      become: yes
-
-...
-
+      become: true   # sudo apenas aqui
