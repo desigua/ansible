@@ -19,7 +19,7 @@
 # ============================================================================
 
 - name: Instalar e habilitar OpenSSH Server no Windows (via WinRM)
-  hosts: windows_winrm
+  hosts: all
   gather_facts: no
   vars:
     ansible_connection: winrm
@@ -82,7 +82,7 @@
 
 
 - name: Verificar conectividade e autenticação SSH em Windows Server
-  hosts: windows_ssh
+  hosts: all
   gather_facts: no
   vars:
     ansible_connection: ssh
@@ -144,4 +144,4 @@
 
     - name: 5. Consolidar resultado do teste
       ansible.builtin.debug:
-        msg: "✅ {{ inventory_hostname }} — Conectividade SSH e autenticação OK"
+        msg: "{{ inventory_hostname }} — Conectividade SSH e autenticação OK"
