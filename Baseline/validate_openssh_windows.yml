@@ -1,0 +1,75 @@
+---
+- name: Validar OpenSSH via SSH
+  hosts: all
+  gather_facts: false
+
+  vars:
+    ansible_connection: ssh
+    ansible_shell_type: powershell
+    ansible_port: 22
+
+  tasks:
+
+    - name: Executar whoami
+      raw: whoami
+      register: whoami_result
+      changed_when: false
+
+    - name: Exibir usuário autenticado
+      debug:
+        msg: "{{ whoami_result.stdout | trim }}"
+
+    - name: Executar hostname
+      raw: hostname
+      register: hostname_result
+      changed_when: false
+
+    - name: Exibir hostname
+      debug:
+        msg: "{{ hostname_result.stdout | trim }}"
+
+    - name: Obter versão PowerShell
+      raw: "$PSVersionTable.PSVersion.ToString()"
+      register: ps_version
+      changed_when: false
+
+    - name: Exibir versão PowerShell
+      debug:
+        msg: "{{ ps_version.stdout | trim }}"
+
+    - name: Consultar serviço SSHD
+      raw: |
+        Get-Service sshd | Select-Object -ExpandProperty Status
+      register: ssh_status
+      changed_when: false
+
+    - name: Exibir status SSHD
+      debug:
+        msg: "{{ ssh_status.stdout | trim }}"
+
+    - name: Obter IP do servidor
+      raw: |
+        (Get-NetIPAddress -AddressFamily IPv4 |
+         Where-Object {$_.IPAddress -notmatch '^169\.254'} |
+         Select-Object -First 1 -ExpandProperty IPAddress)
+      register: host_ip
+      changed_when: false
+
+    - name: Exibir IP
+      debug:
+        msg: "{{ host_ip.stdout | trim }}"
+
+    - name: Testar leitura do sistema
+      raw: |
+        Get-CimInstance Win32_OperatingSystem |
+        Select-Object -ExpandProperty Caption
+      register: os_name
+      changed_when: false
+
+    - name: Exibir SO
+      debug:
+        msg: "{{ os_name.stdout | trim }}"
+
+    - name: Resultado Final
+      debug:
+        msg: "SSH funcional em {{ inventory_hostname }}"
