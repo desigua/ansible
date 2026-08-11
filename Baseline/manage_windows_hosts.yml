@@ -1,6 +1,6 @@
 ---
 - name: Gerenciar arquivo hosts dos servidores Windows
-  hosts: windows_servers
+  hosts: all
   gather_facts: false
   serial: "{{ execution_serial | default('20') }}"
 
