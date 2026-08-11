@@ -1,0 +1,24 @@
+---
+# Entradas obrigatórias.
+# Estas entradas sempre serão recriadas caso sejam removidas manualmente.
+# O Survey não poderá removê-las.
+
+windows_hosts_required:
+
+  - ip: "10.10.10.10"
+    name: "servidor-aplicacao.empresa.local"
+    aliases:
+      - "servidor-aplicacao"
+      - "app01"
+
+  - ip: "10.10.10.20"
+    name: "servidor-banco.empresa.local"
+    aliases:
+      - "servidor-banco"
+      - "db01"
+
+  - ip: "10.10.10.30"
+    name: "servidor-monitoramento.empresa.local"
+    aliases:
+      - "servidor-monitoramento"
+      - "monitor01"
