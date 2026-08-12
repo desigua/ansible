@@ -1,21 +1,21 @@
 ---
-# Entradas obrigatórias.
-#
-# Estas entradas serão verificadas em todas as execuções.
-# Se uma entrada estiver ausente, ela será incluída.
-# O Survey não poderá removê-las.
-# O campo aliases é opcional.
+# Entradas obrigatórias verificadas em todas as execuções.
+# O único campo obrigatório é ip.
+# host_name e host_aliases são opcionais.
+# O Survey não poderá remover IPs presentes nesta lista.
 
 windows_hosts_required:
-
   - ip: "10.10.10.10"
-    name: "servidor-aplicacao.empresa.local"
+    host_name: "servidor-aplicacao.empresa.local"
 
   - ip: "10.10.10.20"
-    name: "servidor-banco.empresa.local"
-    aliases:
+    host_name: "servidor-banco.empresa.local"
+    host_aliases:
       - "servidor-banco"
       - "db01"
 
   - ip: "10.10.10.30"
-    name: "servidor-monitoramento.empresa.local"
+    host_name: "servidor-monitoramento.empresa.local"
+
+  # Exemplo válido com somente IP:
+  # - ip: "10.10.10.40"

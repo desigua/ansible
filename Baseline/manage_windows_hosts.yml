@@ -9,7 +9,6 @@
     evidence_directory: 'C:\Temp\AWX'
     evidence_file: 'C:\Temp\AWX\hosts_ultima_execucao.txt'
 
-    # Variáveis fornecidas pelo Survey do AWX.
     hosts_action: >-
       {{
         survey_hosts_action
@@ -26,8 +25,6 @@
         | string
       }}
 
-    # Se windows_hosts_required não estiver definida,
-    # será considerada uma lista fixa vazia.
     required_hosts_entries: >-
       {{
         windows_hosts_required
@@ -35,14 +32,12 @@
       }}
 
   pre_tasks:
-
     - name: Validar a ação informada pelo Survey
       ansible.builtin.assert:
         that:
           - hosts_action in ['validate', 'add', 'remove']
         fail_msg: >-
-          A ação '{{ hosts_action }}' é inválida.
-          Utilize validate, add ou remove.
+          A ação '{{ hosts_action }}' é inválida. Utilize validate, add ou remove.
         success_msg: >-
           Ação '{{ hosts_action }}' validada com sucesso.
 
@@ -62,8 +57,8 @@
         that:
           - survey_lines | length == 0
         fail_msg: >-
-          A ação validate não processa entradas adicionais.
-          Deixe o campo de entradas vazio ou selecione add ou remove.
+          A ação validate não processa entradas adicionais. Deixe o campo de
+          entradas vazio ou selecione add ou remove.
       when: hosts_action == 'validate'
 
     - name: Exigir pelo menos uma entrada para adicionar ou remover
@@ -71,25 +66,17 @@
         that:
           - survey_lines | length > 0
         fail_msg: >-
-          A ação '{{ hosts_action }}' exige pelo menos uma entrada.
-          Informe uma entrada por linha no formato:
-          IP NOME_CANONICO
-          ou:
-          IP NOME_CANONICO ALIAS1 ALIAS2
+          A ação '{{ hosts_action }}' exige pelo menos uma entrada. Informe uma
+          entrada por linha nos formatos IP ou IP ALIAS1 ALIAS2.
       when: hosts_action in ['add', 'remove']
 
     - name: Validar o formato das entradas recebidas pelo Survey
       ansible.builtin.assert:
         that:
-          - item.split() | length >= 2
-          - item.split()[0] | length > 0
-          - item.split()[1] | length > 0
-          - item is match('^[0-9A-Fa-f:.]+[ \t]+[^ \t#]+([ \t]+[^ \t#]+)*$')
+          - item.split() | length >= 1
+          - item is match('^[0-9A-Fa-f:.]+([ \\t]+[^ \\t#]+)*$')
         fail_msg: >-
-          Linha inválida: '{{ item }}'.
-          Utilize um destes formatos:
-          IP NOME_CANONICO
-          IP NOME_CANONICO ALIAS1 ALIAS2
+          Linha inválida: '{{ item }}'. Utilize IP ou IP ALIAS1 ALIAS2.
       loop: "{{ survey_lines }}"
       loop_control:
         label: "{{ item }}"
@@ -108,8 +95,8 @@
             [
               {
                 'ip': item.split()[0],
-                'name': item.split()[1],
-                'aliases': item.split()[2:]
+                'host_aliases': item.split()[1:],
+                'host_line': item.split() | join(' ')
               }
             ]
           }}
@@ -123,74 +110,65 @@
         that:
           - item is mapping
           - item.ip is defined
-          - item.name is defined
           - item.ip | string | trim | length > 0
-          - item.name | string | trim | length > 0
-          - item.aliases is not defined or item.aliases is sequence
-          - item.aliases is not defined or item.aliases is not string
+          - item.host_name is not defined or item.host_name | string | trim | length > 0
+          - item.host_aliases is not defined or item.host_aliases is sequence
+          - item.host_aliases is not defined or item.host_aliases is not string
         fail_msg: >-
-          Entrada inválida na lista fixa:
-          {{ item | to_nice_json }}.
-          Os campos ip e name são obrigatórios.
-          O campo aliases é opcional e, quando informado,
-          deve ser declarado como uma lista YAML.
+          Entrada inválida na lista fixa: {{ item | to_nice_json }}. O campo ip
+          é obrigatório. host_name é opcional. host_aliases é opcional e deve
+          ser uma lista YAML.
         success_msg: >-
-          Entrada fixa validada:
-          {{ item.ip }} {{ item.name }}.
+          Entrada fixa validada para o IP {{ item.ip }}.
       loop: "{{ required_hosts_entries }}"
       loop_control:
-        label: >-
-          {{
-            item.ip | default('IP ausente')
-          }}
-          {{
-            item.name | default('nome ausente')
-          }}
+        label: "{{ item.ip | default('IP ausente') }}"
       when: required_hosts_entries | length > 0
 
-    - name: Inicializar a lista de nomes obrigatórios
+    - name: Inicializar a lista estruturada de entradas fixas
       ansible.builtin.set_fact:
-        required_canonical_names: []
+        required_hosts_parsed: []
 
-    - name: Montar a lista de nomes canônicos obrigatórios
+    - name: Converter entradas fixas para linhas normalizadas
       ansible.builtin.set_fact:
-        required_canonical_names: >-
+        required_hosts_parsed: >-
           {{
-            required_canonical_names
+            required_hosts_parsed
             +
-            [item.name | string | trim | lower]
+            [
+              {
+                'ip': item.ip | string | trim,
+                'host_line': (
+                  [item.ip | string | trim]
+                  + ([item.host_name | string | trim] if item.host_name is defined else [])
+                  + (item.host_aliases | default([]) | list)
+                ) | join(' ')
+              }
+            ]
           }}
       loop: "{{ required_hosts_entries }}"
       loop_control:
-        label: "{{ item.name }}"
+        label: "{{ item.ip }}"
       when: required_hosts_entries | length > 0
 
-    - name: Inicializar a lista de nomes solicitados para remoção
+    - name: Inicializar a lista de IPs obrigatórios
       ansible.builtin.set_fact:
-        requested_removal_names: []
-      when: hosts_action == 'remove'
+        required_host_ips: []
 
-    - name: Montar a lista de nomes solicitados para remoção
+    - name: Montar a lista de IPs obrigatórios
       ansible.builtin.set_fact:
-        requested_removal_names: >-
-          {{
-            requested_removal_names
-            +
-            [item.name | string | trim | lower]
-          }}
-      loop: "{{ survey_hosts_parsed }}"
+        required_host_ips: "{{ required_host_ips + [item.ip | lower] }}"
+      loop: "{{ required_hosts_parsed }}"
       loop_control:
-        label: "{{ item.name }}"
-      when:
-        - hosts_action == 'remove'
-        - survey_hosts_parsed | length > 0
+        label: "{{ item.ip }}"
+      when: required_hosts_parsed | length > 0
 
-    - name: Identificar entradas obrigatórias solicitadas para remoção
+    - name: Identificar IPs obrigatórios solicitados para remoção
       ansible.builtin.set_fact:
-        protected_removal_names: >-
+        protected_removal_ips: >-
           {{
-            required_canonical_names
-            | intersect(requested_removal_names | default([]))
+            required_host_ips
+            | intersect(survey_hosts_parsed | map(attribute='ip') | map('lower') | list)
             | list
           }}
       when: hosts_action == 'remove'
@@ -198,127 +176,91 @@
     - name: Bloquear a remoção das entradas da lista fixa
       ansible.builtin.assert:
         that:
-          - protected_removal_names | default([]) | length == 0
+          - protected_removal_ips | default([]) | length == 0
         fail_msg: >-
-          Execução bloqueada. As seguintes entradas pertencem
-          à lista fixa obrigatória e não podem ser removidas pelo Survey:
-          {{
-            protected_removal_names
-            | default([])
-            | join(', ')
-          }}.
-          Para remover uma entrada obrigatória, altere primeiro
-          a variável windows_hosts_required no Git ou no AWX.
-        success_msg: >-
-          Nenhuma entrada obrigatória foi solicitada para remoção.
+          Execução bloqueada. Os seguintes IPs pertencem à lista fixa e não
+          podem ser removidos pelo Survey: {{ protected_removal_ips | join(', ') }}.
+        success_msg: Nenhum IP obrigatório foi solicitado para remoção.
       when: hosts_action == 'remove'
 
   tasks:
+    - name: Garantir que o arquivo hosts exista
+      ansible.windows.win_file:
+        path: "{{ hosts_file_path }}"
+        state: touch
+      changed_when: false
 
     - name: Garantir que as entradas da lista fixa estejam presentes
-      ansible.windows.win_hosts:
+      community.windows.win_lineinfile:
+        path: "{{ hosts_file_path }}"
+        regexp: "^{{ item.ip | regex_escape }}(?:[ \\t]+.*)?$"
+        line: "{{ item.host_line }}"
         state: present
-        ip_address: "{{ item.ip }}"
-        canonical_name: "{{ item.name }}"
-        aliases: "{{ item.aliases | default(omit) }}"
-        action: set
-      loop: "{{ required_hosts_entries }}"
+        create: true
+        backup: true
+      loop: "{{ required_hosts_parsed }}"
       loop_control:
-        label: "{{ item.ip }} {{ item.name }}"
+        label: "{{ item.host_line }}"
       register: required_entries_result
-      when: required_hosts_entries | length > 0
+      when: required_hosts_parsed | length > 0
 
     - name: Informar que não existe lista fixa configurada
       ansible.builtin.debug:
         msg: >-
-          Nenhuma entrada fixa foi configurada na variável
-          windows_hosts_required. Somente as entradas recebidas
-          pelo Survey serão processadas.
-      when: required_hosts_entries | length == 0
+          Nenhuma entrada fixa foi configurada em windows_hosts_required.
+          Somente as entradas recebidas pelo Survey serão processadas.
+      when: required_hosts_parsed | length == 0
 
-    - name: Adicionar ou atualizar entradas sem aliases
-      ansible.windows.win_hosts:
+    - name: Adicionar ou atualizar entradas recebidas pelo Survey
+      community.windows.win_lineinfile:
+        path: "{{ hosts_file_path }}"
+        regexp: "^{{ item.ip | regex_escape }}(?:[ \\t]+.*)?$"
+        line: "{{ item.host_line }}"
         state: present
-        ip_address: "{{ item.ip }}"
-        canonical_name: "{{ item.name }}"
+        create: true
+        backup: true
       loop: "{{ survey_hosts_parsed }}"
       loop_control:
-        label: "{{ item.ip }} {{ item.name }}"
-      register: added_entries_without_aliases
+        label: "{{ item.host_line }}"
+      register: added_entries_result
       when:
         - hosts_action == 'add'
         - survey_hosts_parsed | length > 0
-        - item.aliases | default([]) | length == 0
 
-    - name: Adicionar ou atualizar entradas com aliases
-      ansible.windows.win_hosts:
-        state: present
-        ip_address: "{{ item.ip }}"
-        canonical_name: "{{ item.name }}"
-        aliases: "{{ item.aliases }}"
-        action: set
-      loop: "{{ survey_hosts_parsed }}"
-      loop_control:
-        label: >-
-          {{ item.ip }}
-          {{ item.name }}
-          {{ item.aliases | default([]) | join(' ') }}
-      register: added_entries_with_aliases
-      when:
-        - hosts_action == 'add'
-        - survey_hosts_parsed | length > 0
-        - item.aliases | default([]) | length > 0
-
-    - name: Remover as entradas recebidas pelo Survey
-      ansible.windows.win_hosts:
+    - name: Remover entradas recebidas pelo Survey pelo IP
+      community.windows.win_lineinfile:
+        path: "{{ hosts_file_path }}"
+        regexp: "^{{ item.ip | regex_escape }}(?:[ \\t]+.*)?$"
         state: absent
-        ip_address: "{{ item.ip }}"
-        canonical_name: "{{ item.name }}"
+        backup: true
       loop: "{{ survey_hosts_parsed }}"
       loop_control:
-        label: "{{ item.ip }} {{ item.name }}"
+        label: "{{ item.ip }}"
       register: removed_entries_result
       when:
         - hosts_action == 'remove'
         - survey_hosts_parsed | length > 0
 
-    - name: Confirmar novamente as entradas fixas com aliases
-      ansible.windows.win_hosts:
+    - name: Confirmar novamente as entradas fixas após as alterações
+      community.windows.win_lineinfile:
+        path: "{{ hosts_file_path }}"
+        regexp: "^{{ item.ip | regex_escape }}(?:[ \\t]+.*)?$"
+        line: "{{ item.host_line }}"
         state: present
-        ip_address: "{{ item.ip }}"
-        canonical_name: "{{ item.name }}"
-        aliases: "{{ item.aliases }}"
-        action: set
-      loop: "{{ required_hosts_entries }}"
+        create: true
+        backup: true
+      loop: "{{ required_hosts_parsed }}"
       loop_control:
-        label: "{{ item.ip }} {{ item.name }}"
-      register: final_required_with_aliases
-      when:
-        - required_hosts_entries | length > 0
-        - item.aliases is defined
-        - item.aliases | length > 0
-
-    - name: Confirmar novamente as entradas fixas sem aliases
-      ansible.windows.win_hosts:
-        state: present
-        ip_address: "{{ item.ip }}"
-        canonical_name: "{{ item.name }}"
-      loop: "{{ required_hosts_entries }}"
-      loop_control:
-        label: "{{ item.ip }} {{ item.name }}"
-      register: final_required_without_aliases
-      when:
-        - required_hosts_entries | length > 0
-        - item.aliases is not defined or item.aliases | length == 0
+        label: "{{ item.host_line }}"
+      register: final_required_entries_result
+      when: required_hosts_parsed | length > 0
 
     - name: Ler o conteúdo atualizado do arquivo hosts
       ansible.windows.win_shell: |
         $hostsPath = Join-Path $env:SystemRoot 'System32\drivers\etc\hosts'
-
         if (-not (Test-Path -LiteralPath $hostsPath)) {
             throw "Arquivo hosts não encontrado: $hostsPath"
         }
-
         Get-Content -LiteralPath $hostsPath
       changed_when: false
       register: current_hosts_content
@@ -339,32 +281,15 @@
           Servidor: {{ inventory_hostname }}
           Ação solicitada: {{ hosts_action }}
           Entradas recebidas pelo Survey: {{ survey_hosts_parsed | length }}
-          Entradas da lista fixa: {{ required_hosts_entries | length }}
+          Entradas da lista fixa: {{ required_hosts_parsed | length }}
           Alias obrigatório: Não
-
-          ================================================================
-          RESULTADO DA EXECUÇÃO
-          ================================================================
-
-          {% if hosts_action == 'validate' %}
-          A lista fixa foi validada.
-          As entradas fixas ausentes foram incluídas.
-          As entradas fixas existentes foram mantidas ou corrigidas.
-          {% elif hosts_action == 'add' %}
-          A lista fixa foi validada.
-          As entradas recebidas pelo Survey foram adicionadas ou atualizadas.
-          {% elif hosts_action == 'remove' %}
-          As entradas não protegidas recebidas pelo Survey foram removidas.
-          A lista fixa foi validada novamente após a remoção.
-          {% endif %}
 
           ================================================================
           ENTRADAS RECEBIDAS PELO SURVEY
           ================================================================
-
           {% if survey_hosts_parsed | length > 0 %}
           {% for entry in survey_hosts_parsed %}
-          {{ entry.ip }} {{ entry.name }}{% if entry.aliases | default([]) | length > 0 %} {{ entry.aliases | join(' ') }}{% endif %}
+          {{ entry.host_line }}
           {% endfor %}
           {% else %}
           Nenhuma entrada foi recebida pelo Survey.
@@ -373,10 +298,9 @@
           ================================================================
           LISTA FIXA CONFIGURADA
           ================================================================
-
-          {% if required_hosts_entries | length > 0 %}
-          {% for entry in required_hosts_entries %}
-          {{ entry.ip }} {{ entry.name }}{% if entry.aliases | default([]) | length > 0 %} {{ entry.aliases | join(' ') }}{% endif %}
+          {% if required_hosts_parsed | length > 0 %}
+          {% for entry in required_hosts_parsed %}
+          {{ entry.host_line }}
           {% endfor %}
           {% else %}
           Nenhuma lista fixa foi configurada.
@@ -385,7 +309,6 @@
           ================================================================
           CONTEÚDO ATUAL DO ARQUIVO HOSTS
           ================================================================
-
           {{ current_hosts_content.stdout }}
 
     - name: Exibir o resumo da execução
@@ -394,7 +317,7 @@
           - "Servidor: {{ inventory_hostname }}"
           - "Ação executada: {{ hosts_action }}"
           - "Entradas recebidas pelo Survey: {{ survey_hosts_parsed | length }}"
-          - "Entradas da lista fixa: {{ required_hosts_entries | length }}"
+          - "Entradas da lista fixa: {{ required_hosts_parsed | length }}"
           - "Arquivo gerenciado: {{ hosts_file_path }}"
           - "Evidência gerada em: {{ evidence_file }}"
 
