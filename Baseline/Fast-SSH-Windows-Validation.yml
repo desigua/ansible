@@ -1,0 +1,15 @@
+---
+- name: Teste SSH Windows
+  hosts: all
+  gather_facts: false
+
+  tasks:
+
+    - name: Teste SSH
+      raw: |
+        echo "HOST=$(hostname)"
+        echo "USER=$(whoami)"
+      register: resultado
+
+    - debug:
+        var: resultado.stdout_lines
