@@ -1,0 +1,16 @@
+---
+- name: Teste Get-LocalGroupMember
+  hosts: all
+  gather_facts: false
+
+  tasks:
+
+    - name: Listar administradores
+      raw: >
+        powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command
+        "Get-LocalGroupMember Administrators | Select Name,ObjectClass"
+
+      register: resultado
+
+    - debug:
+        var: resultado.stdout_lines
