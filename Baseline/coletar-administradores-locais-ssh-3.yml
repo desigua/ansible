@@ -1,0 +1,58 @@
+---
+- name: Validar administradores locais via SSH
+  hosts: all
+  gather_facts: false
+
+  vars:
+    administradores_permitidos:
+      - mabreu
+      - mabra
+
+  tasks:
+
+    - name: Coletar administradores locais
+      raw: net localgroup Administrators
+      register: admins_raw
+
+    - name: Extrair administradores encontrados
+      set_fact:
+        administradores_encontrados: >-
+          {{
+            admins_raw.stdout_lines
+            | reject('match', '^Alias name')
+            | reject('match', '^Comment')
+            | reject('match', '^Members')
+            | reject('match', '^---')
+            | reject('match', '^The command completed successfully')
+            | reject('equalto', '')
+            | map('trim')
+            | list
+          }}
+
+    - name: Calcular administradores faltando
+      set_fact:
+        administradores_faltando: >-
+          {{
+            administradores_permitidos
+            | reject('in', administradores_encontrados)
+            | list
+          }}
+
+    - name: Calcular administradores extras
+      set_fact:
+        administradores_extras: >-
+          {{
+            administradores_encontrados
+            | reject('in', administradores_permitidos)
+            | list
+          }}
+
+    - name: Exibir resultado
+      debug:
+        msg:
+          - "Servidor: {{ inventory_hostname }}"
+          - "Permitidos: {{ administradores_permitidos }}"
+          - "Encontrados: {{ administradores_encontrados }}"
+          - "Faltando: {{ administradores_faltando }}"
+          - "Extras: {{ administradores_extras }}"
+          - "Status: {{ 'COMPLIANT' if administradores_faltando | length == 0 else 'NON-COMPLIANT' }}"
