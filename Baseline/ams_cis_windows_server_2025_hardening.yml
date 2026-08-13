@@ -6,6 +6,14 @@
     - ansible.windows
     - community.windows
 
+  vars:
+    # Conta local RID-500 (Administrator/Administrador) a ser renomeada.
+    ams_admin_target_name: "desiguadoido"
+    ams_admin_candidate_names:
+      - "Administrator"
+      - "Administrador"
+    ams_expected_awx_user: "mabreu"
+
   pre_tasks:
     - name: Precheck | Coletar contexto do servidor Windows
       ansible.windows.win_powershell:
@@ -289,7 +297,7 @@
         account_disabled: true
       tags: [guest, cis_l1]
 
-    - name: Local Accounts | Renomear Administrator/Administrador para desiguadoido e gerar senha aleatoria
+    - name: Local Accounts | Renomear Administrator/Administrador para desiguadoido
       ansible.windows.win_powershell:
         script: |
           $target = '{{ ams_admin_target_name }}'
@@ -327,151 +335,17 @@
             throw "Ja existe uma conta local chamada '$target' com SID diferente. Abortando para evitar colisao."
           }
 
-          $length = [int]'{{ ams_admin_password_length }}'
-          if ($length -lt 24) { $length = 24 }
-
-          Add-Type -AssemblyName System.Web
-          $password = [System.Web.Security.Membership]::GeneratePassword($length, 8)
-          while ($password -notmatch '[a-z]' -or $password -notmatch '[A-Z]' -or $password -notmatch '[0-9]' -or $password -notmatch '[^a-zA-Z0-9]') {
-            $password = [System.Web.Security.Membership]::GeneratePassword($length, 8)
-          }
-
           if ($account.Name -ne $target) {
             Rename-LocalUser -Name $account.Name -NewName $target
           }
-
-          $securePassword = ConvertTo-SecureString $password -AsPlainText -Force
-          Set-LocalUser -Name $target -Password $securePassword
-          Enable-LocalUser -Name $target
 
           [PSCustomObject]@{
             AccountName = $target
             OriginalName = $account.Name
             SID = $account.SID.Value
-            Password = $password
-            CredentialName = "{{ ams_awx_admin_credential_prefix }} - {{ inventory_hostname }} - $target"
           } | ConvertTo-Json -Compress
       register: ams_admin_account_result
-      no_log: true
-      tags: [administrator, local_accounts, cis_l1, awx_credentials]
-
-    - name: AWX Credentials | Validar variaveis obrigatorias para armazenar senha no AWX
-      when: ams_store_admin_password_in_awx | bool
-      ansible.builtin.assert:
-        that:
-          - ams_awx_controller_url | length > 0
-          - ams_awx_oauth_token | length > 0
-          - ams_awx_organization_name | length > 0
-          - ams_awx_machine_credential_type_name | length > 0
-        fail_msg: "Para armazenar a senha em Credentials no AWX, informe ams_awx_controller_url e ams_awx_oauth_token via Survey/extra_vars/Credential Type customizado."
-      no_log: true
-      delegate_to: localhost
-      tags: [administrator, local_accounts, cis_l1, awx_credentials]
-
-    - name: AWX Credentials | Preparar facts sensiveis da conta local
-      when: ams_store_admin_password_in_awx | bool
-      ansible.builtin.set_fact:
-        ams_admin_account_secret: "{{ ams_admin_account_result.output[0] | from_json }}"
-      no_log: true
-      tags: [administrator, local_accounts, cis_l1, awx_credentials]
-
-    - name: AWX Credentials | Obter organizacao no AWX
-      when: ams_store_admin_password_in_awx | bool
-      ansible.builtin.uri:
-        url: "{{ ams_awx_controller_url | regex_replace('/$', '') }}/api/v2/organizations/?name={{ ams_awx_organization_name | urlencode }}"
-        method: GET
-        headers:
-          Authorization: "Bearer {{ ams_awx_oauth_token }}"
-        validate_certs: "{{ ams_awx_validate_certs | bool }}"
-        return_content: true
-      register: ams_awx_org_lookup
-      no_log: true
-      delegate_to: localhost
-      tags: [administrator, local_accounts, cis_l1, awx_credentials]
-
-    - name: AWX Credentials | Obter Credential Type Machine no AWX
-      when: ams_store_admin_password_in_awx | bool
-      ansible.builtin.uri:
-        url: "{{ ams_awx_controller_url | regex_replace('/$', '') }}/api/v2/credential_types/?name={{ ams_awx_machine_credential_type_name | urlencode }}"
-        method: GET
-        headers:
-          Authorization: "Bearer {{ ams_awx_oauth_token }}"
-        validate_certs: "{{ ams_awx_validate_certs | bool }}"
-        return_content: true
-      register: ams_awx_credential_type_lookup
-      no_log: true
-      delegate_to: localhost
-      tags: [administrator, local_accounts, cis_l1, awx_credentials]
-
-    - name: AWX Credentials | Validar organizacao e credential type encontrados
-      when: ams_store_admin_password_in_awx | bool
-      ansible.builtin.assert:
-        that:
-          - (ams_awx_org_lookup.json.count | int) > 0
-          - (ams_awx_credential_type_lookup.json.count | int) > 0
-        fail_msg: "Organizacao ou Credential Type nao encontrados no AWX. Verifique ams_awx_organization_name e ams_awx_machine_credential_type_name."
-      no_log: true
-      delegate_to: localhost
-      tags: [administrator, local_accounts, cis_l1, awx_credentials]
-
-    - name: AWX Credentials | Procurar credential existente para desiguadoido
-      when: ams_store_admin_password_in_awx | bool
-      ansible.builtin.uri:
-        url: "{{ ams_awx_controller_url | regex_replace('/$', '') }}/api/v2/credentials/?name={{ ams_admin_account_secret.CredentialName | urlencode }}&organization={{ ams_awx_org_lookup.json.results[0].id }}"
-        method: GET
-        headers:
-          Authorization: "Bearer {{ ams_awx_oauth_token }}"
-        validate_certs: "{{ ams_awx_validate_certs | bool }}"
-        return_content: true
-      register: ams_awx_existing_credential
-      no_log: true
-      delegate_to: localhost
-      tags: [administrator, local_accounts, cis_l1, awx_credentials]
-
-    - name: AWX Credentials | Criar credential Machine no AWX para desiguadoido
-      when:
-        - ams_store_admin_password_in_awx | bool
-        - (ams_awx_existing_credential.json.count | int) == 0
-      ansible.builtin.uri:
-        url: "{{ ams_awx_controller_url | regex_replace('/$', '') }}/api/v2/credentials/"
-        method: POST
-        headers:
-          Authorization: "Bearer {{ ams_awx_oauth_token }}"
-          Content-Type: "application/json"
-        validate_certs: "{{ ams_awx_validate_certs | bool }}"
-        status_code: [200, 201]
-        body_format: json
-        body:
-          name: "{{ ams_admin_account_secret.CredentialName }}"
-          organization: "{{ ams_awx_org_lookup.json.results[0].id }}"
-          credential_type: "{{ ams_awx_credential_type_lookup.json.results[0].id }}"
-          inputs:
-            username: "{{ ams_admin_account_secret.AccountName }}"
-            password: "{{ ams_admin_account_secret.Password }}"
-      no_log: true
-      delegate_to: localhost
-      tags: [administrator, local_accounts, cis_l1, awx_credentials]
-
-    - name: AWX Credentials | Atualizar credential Machine existente no AWX para desiguadoido
-      when:
-        - ams_store_admin_password_in_awx | bool
-        - (ams_awx_existing_credential.json.count | int) > 0
-      ansible.builtin.uri:
-        url: "{{ ams_awx_controller_url | regex_replace('/$', '') }}/api/v2/credentials/{{ ams_awx_existing_credential.json.results[0].id }}/"
-        method: PATCH
-        headers:
-          Authorization: "Bearer {{ ams_awx_oauth_token }}"
-          Content-Type: "application/json"
-        validate_certs: "{{ ams_awx_validate_certs | bool }}"
-        status_code: [200, 202]
-        body_format: json
-        body:
-          inputs:
-            username: "{{ ams_admin_account_secret.AccountName }}"
-            password: "{{ ams_admin_account_secret.Password }}"
-      no_log: true
-      delegate_to: localhost
-      tags: [administrator, local_accounts, cis_l1, awx_credentials]
+      tags: [administrator, local_accounts, cis_l1]
 
     ###########################################################################
     # CREDENTIAL GUARD

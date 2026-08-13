@@ -6,6 +6,9 @@
     - ansible.windows
     - community.windows
 
+  vars:
+    ams_rollback_administrator_to: "Administrator"
+
   pre_tasks:
     - name: Rollback Precheck | Coletar contexto do servidor Windows
       ansible.windows.win_powershell:

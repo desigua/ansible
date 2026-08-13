@@ -1,47 +1,27 @@
 ---
-# AMS CIS Windows Server Hardening - variaveis globais para AWX
-# Compatibilidade alvo: Windows Server 2019, 2022 e 2025
-# Usuario operacional esperado no Credential do AWX: mabreu.
-# Nao coloque senha neste arquivo. Senhas devem ficar em AWX Credential, Ansible Vault ou cofre externo.
+# AMS CIS Windows Server Hardening - variaveis globais (AWX)
+# Compatibilidade alvo: Windows Server 2019, 2022 e 2025.
+#
+# Este projeto e operado exclusivamente via AWX. O usuario/senha usados para
+# conectar via WinRM nos hosts Windows devem vir do Machine Credential
+# configurado no Job Template do AWX - nunca de variavel neste arquivo.
+#
+# As variaveis da conta local Administrator/Administrador (nome alvo, nomes
+# candidatos e usuario esperado do AWX) ficam definidas dentro de cada
+# playbook (bloco vars:), pois sao especificas da logica de rename/rollback.
 
-ams_expected_awx_user: "mabreu"
-ams_local_admin_credential_hint: '.\mabreu'
-ams_domain_admin_credential_hint: 'DOMINIO\mabreu'
-
-# Administrador local interno
-# O playbook trata os nomes localizados Administrator e Administrador como candidatos da conta RID-500.
-# Se houver duas contas locais distintas chamadas Administrator e Administrador, o playbook falha com seguranca,
-# porque o Windows nao permite renomear duas contas diferentes para o mesmo nome.
-ams_admin_target_name: "desiguadoido"
-ams_admin_candidate_names:
-  - "Administrator"
-  - "Administrador"
-ams_rename_administrator_to: "desiguadoido"
-ams_rollback_administrator_to: "Administrator"
-ams_manage_admin_password: true
-ams_admin_password_length: 40
-
-# Armazenamento automacao de credential no AWX.
-# Para funcionar, informe esses valores via Survey, extra_vars ou um Credential Type customizado no AWX.
-# Nunca grave token no Git.
-ams_store_admin_password_in_awx: true
-ams_awx_controller_url: ""
-ams_awx_oauth_token: ""
-ams_awx_organization_name: "Default"
-ams_awx_machine_credential_type_name: "Machine"
-ams_awx_admin_credential_prefix: "AMS Local Admin"
-ams_awx_validate_certs: true
-
-# Politicas locais aplicadas apenas em servidores standalone.
+# Password Policy (aplicada apenas em servidores standalone, fora de dominio)
 ams_password_history_size: 24
 ams_maximum_password_age: 90
 ams_minimum_password_length: 9
 ams_password_complexity: 1
+
+# Account Lockout (aplicada apenas em servidores standalone, fora de dominio)
 ams_lockout_bad_count: 5
 ams_lockout_duration: 15
 ams_reset_lockout_count: 15
 
-# Subcategorias de auditoria avancada.
+# Audit Policy - subcategorias avancadas habilitadas (sucesso e falha)
 ams_audit_subcategories:
   - "Credential Validation"
   - "Kerberos Authentication Service"
@@ -59,19 +39,19 @@ ams_audit_subcategories:
   - "Sensitive Privilege Use"
   - "System Integrity"
 
-# Event log retention
+# Event Log - tamanho maximo e retencao
 ams_eventlog_security_max_size_mb: 256
 ams_eventlog_application_max_size_mb: 128
 ams_eventlog_system_max_size_mb: 128
 ams_eventlog_retention: true
 
-# Controles opcionais
+# Controles opcionais de hardening
 ams_disable_ipv6: true
 ams_disable_spooler: true
 ams_enable_credential_guard: true
 ams_enable_tls13_when_supported: true
 
-# Rollback seguro: por padrao nao reabilita protocolos legados perigosos.
+# Rollback seguro: por padrao nao reabilita protocolos legados perigosos
 ams_rollback_enable_legacy_protocols: false
 ams_rollback_enable_spooler: false
 ams_rollback_enable_ipv6: false
