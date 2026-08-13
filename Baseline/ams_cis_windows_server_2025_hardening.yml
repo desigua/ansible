@@ -58,8 +58,11 @@
     # Controles opcionais de hardening
     ams_disable_ipv6: true
     ams_disable_spooler: true
-    ams_enable_credential_guard: true
     ams_enable_tls13_when_supported: true
+    # Requer UEFI + Secure Boot + virtualizacao assistida por hardware (SLAT).
+    # Em VMs, o hypervisor precisa ter virtualizacao aninhada habilitada,
+    # senao a ativacao pode falhar ou o host pode nao bootar corretamente.
+    ams_enable_credential_guard: true
 
   pre_tasks:
     - name: Precheck | Detectar metodo de conexao (WinRM ou SSH)
@@ -531,7 +534,6 @@
           - "Servidor: {{ inventory_hostname }}"
           - "SO: {{ ams_server_info.Caption }} build {{ ams_server_info.BuildNumber }}"
           - "Domain Member: {{ is_domain_member }}"
-          - "Credential operacional AWX esperado: mabreu"
           - "Password Policy aplicada somente se standalone: {{ not is_domain_member }}"
           - "Lockout Policy aplicada somente se standalone: {{ not is_domain_member }}"
           - "Audit Policy aplicada"
