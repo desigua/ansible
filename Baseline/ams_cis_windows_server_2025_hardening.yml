@@ -1,0 +1,627 @@
+---
+- name: AMS CIS L1/L2 Core Hardening - Windows Server 2019/2022/2025
+  hosts: all
+  gather_facts: false
+  collections:
+    - ansible.windows
+    - community.windows
+
+  pre_tasks:
+    - name: Precheck | Coletar contexto do servidor Windows
+      ansible.windows.win_powershell:
+        script: |
+          $cs = Get-CimInstance Win32_ComputerSystem
+          $os = Get-CimInstance Win32_OperatingSystem
+          $current = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+          $admin = $false
+          try {
+            $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
+            $admin = $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+          } catch {}
+          [PSCustomObject]@{
+            ComputerName = $cs.Name
+            Domain = $cs.Domain
+            PartOfDomain = [bool]$cs.PartOfDomain
+            Caption = $os.Caption
+            Version = $os.Version
+            BuildNumber = [int]$os.BuildNumber
+            CurrentUser = $current
+            IsAdministrator = [bool]$admin
+          } | ConvertTo-Json -Compress
+      register: ams_precheck_raw
+      changed_when: false
+      tags: [always, precheck]
+
+    - name: Precheck | Converter contexto em facts
+      ansible.builtin.set_fact:
+        ams_server_info: "{{ ams_precheck_raw.output[0] | from_json }}"
+        is_domain_member: "{{ (ams_precheck_raw.output[0] | from_json).PartOfDomain | bool }}"
+      tags: [always, precheck]
+
+    - name: Precheck | Validar suporte Windows Server 2019/2022/2025
+      ansible.builtin.assert:
+        that:
+          - ams_server_info.BuildNumber | int >= 17763
+          - ams_server_info.IsAdministrator | bool
+        fail_msg: "Servidor nao suportado ou usuario do AWX nao possui privilegio administrativo. Use Windows Server 2019+ e Credential administrativo, ex: mabreu."
+        success_msg: "Precheck aprovado para {{ ams_server_info.Caption }} build {{ ams_server_info.BuildNumber }} usando {{ ams_server_info.CurrentUser }}."
+      tags: [always, precheck]
+
+    - name: Precheck | Exibir contexto
+      ansible.builtin.debug:
+        msg:
+          - "Servidor: {{ ams_server_info.ComputerName }}"
+          - "SO: {{ ams_server_info.Caption }} build {{ ams_server_info.BuildNumber }}"
+          - "Dominio: {{ ams_server_info.Domain }}"
+          - "Ingressado em dominio: {{ is_domain_member }}"
+          - "Usuario efetivo WinRM/AWX: {{ ams_server_info.CurrentUser }}"
+      tags: [always, precheck]
+
+  tasks:
+    ###########################################################################
+    # PASSWORD POLICY - STANDALONE ONLY
+    ###########################################################################
+    - name: Password Policy | Aplicar politicas locais em servidores standalone
+      when: not is_domain_member
+      tags: [password_policy, cis_l1]
+      block:
+        - name: Password Policy | Historico de senhas
+          community.windows.win_security_policy:
+            section: System Access
+            key: PasswordHistorySize
+            value: "{{ ams_password_history_size }}"
+
+        - name: Password Policy | Idade maxima da senha
+          community.windows.win_security_policy:
+            section: System Access
+            key: MaximumPasswordAge
+            value: "{{ ams_maximum_password_age }}"
+
+        - name: Password Policy | Tamanho minimo da senha
+          community.windows.win_security_policy:
+            section: System Access
+            key: MinimumPasswordLength
+            value: "{{ ams_minimum_password_length }}"
+
+        - name: Password Policy | Complexidade de senha
+          community.windows.win_security_policy:
+            section: System Access
+            key: PasswordComplexity
+            value: "{{ ams_password_complexity }}"
+
+    ###########################################################################
+    # ACCOUNT LOCKOUT - STANDALONE ONLY
+    ###########################################################################
+    - name: Account Lockout | Aplicar politicas locais em servidores standalone
+      when: not is_domain_member
+      tags: [account_lockout, cis_l1]
+      block:
+        - name: Account Lockout | Tentativas invalidas antes de bloqueio
+          community.windows.win_security_policy:
+            section: System Access
+            key: LockoutBadCount
+            value: "{{ ams_lockout_bad_count }}"
+
+        - name: Account Lockout | Duracao do bloqueio
+          community.windows.win_security_policy:
+            section: System Access
+            key: LockoutDuration
+            value: "{{ ams_lockout_duration }}"
+
+        - name: Account Lockout | Reset do contador
+          community.windows.win_security_policy:
+            section: System Access
+            key: ResetLockoutCount
+            value: "{{ ams_reset_lockout_count }}"
+
+    ###########################################################################
+    # AUDIT POLICY
+    ###########################################################################
+    - name: Audit Policy | Habilitar auditoria avancada sucesso e falha
+      ansible.windows.win_powershell:
+        script: |
+          auditpol /set /subcategory:"{{ item }}" /success:enable /failure:enable
+      loop: "{{ ams_audit_subcategories }}"
+      tags: [audit_policy, cis_l1]
+
+    ###########################################################################
+    # WINDOWS FIREWALL
+    ###########################################################################
+    - name: Firewall | Habilitar perfis Domain, Private e Public
+      ansible.windows.win_powershell:
+        script: |
+          Set-NetFirewallProfile -Profile Domain,Private,Public -Enabled True
+      tags: [firewall, cis_l1]
+
+    ###########################################################################
+    # MICROSOFT DEFENDER - SEM ASR RULES
+    ###########################################################################
+    - name: Defender | Protecao em tempo real
+      ansible.windows.win_powershell:
+        script: |
+          if (Get-Command Set-MpPreference -ErrorAction SilentlyContinue) {
+            Set-MpPreference -DisableRealtimeMonitoring $false
+          }
+      tags: [defender, cis_l1]
+
+    - name: Defender | Cloud Protection Advanced
+      ansible.windows.win_powershell:
+        script: |
+          if (Get-Command Set-MpPreference -ErrorAction SilentlyContinue) {
+            Set-MpPreference -MAPSReporting Advanced
+          }
+      tags: [defender, cis_l1]
+
+    - name: Defender | Envio automatico de amostras seguras
+      ansible.windows.win_powershell:
+        script: |
+          if (Get-Command Set-MpPreference -ErrorAction SilentlyContinue) {
+            Set-MpPreference -SubmitSamplesConsent 1
+          }
+      tags: [defender, cis_l1]
+
+    ###########################################################################
+    # POWERSHELL LOGGING
+    ###########################################################################
+    - name: PowerShell Logging | Module Logging
+      ansible.windows.win_regedit:
+        path: 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell\ModuleLogging'
+        name: EnableModuleLogging
+        data: 1
+        type: dword
+      tags: [powershell_logging, cis_l1]
+
+    - name: PowerShell Logging | Registrar todos os modulos
+      ansible.windows.win_regedit:
+        path: 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell\ModuleLogging\ModuleNames'
+        name: '*'
+        data: '*'
+        type: string
+      tags: [powershell_logging, cis_l1]
+
+    - name: PowerShell Logging | Script Block Logging
+      ansible.windows.win_regedit:
+        path: 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell\ScriptBlockLogging'
+        name: EnableScriptBlockLogging
+        data: 1
+        type: dword
+      tags: [powershell_logging, cis_l1]
+
+    - name: PowerShell Logging | Transcription
+      ansible.windows.win_regedit:
+        path: 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell\Transcription'
+        name: EnableTranscripting
+        data: 1
+        type: dword
+      tags: [powershell_logging, cis_l1]
+
+    ###########################################################################
+    # SMBv1
+    ###########################################################################
+    - name: SMBv1 | Desabilitar SMBv1 no servidor SMB
+      ansible.windows.win_powershell:
+        script: |
+          if (Get-Command Set-SmbServerConfiguration -ErrorAction SilentlyContinue) {
+            Set-SmbServerConfiguration -EnableSMB1Protocol $false -Force
+          }
+      tags: [smbv1, cis_l1]
+
+    - name: SMBv1 | Remover recursos opcionais SMB1Protocol quando existirem
+      ansible.windows.win_powershell:
+        script: |
+          $features = @('SMB1Protocol','SMB1Protocol-Client','SMB1Protocol-Server')
+          foreach ($f in $features) {
+            $feature = Get-WindowsOptionalFeature -Online -FeatureName $f -ErrorAction SilentlyContinue
+            if ($feature -and $feature.State -ne 'Disabled') {
+              Disable-WindowsOptionalFeature -Online -FeatureName $f -NoRestart
+            }
+          }
+      tags: [smbv1, cis_l1]
+
+    ###########################################################################
+    # LLMNR / NETBIOS
+    ###########################################################################
+    - name: LLMNR | Desabilitar resolucao multicast
+      ansible.windows.win_regedit:
+        path: 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\DNSClient'
+        name: EnableMulticast
+        data: 0
+        type: dword
+      tags: [llmnr, cis_l1]
+
+    - name: NetBIOS | Desabilitar NetBIOS over TCP/IP nas interfaces IP-enabled
+      ansible.windows.win_powershell:
+        script: |
+          Get-CimInstance Win32_NetworkAdapterConfiguration | Where-Object { $_.IPEnabled } | ForEach-Object {
+            Invoke-CimMethod -InputObject $_ -MethodName SetTcpipNetbios -Arguments @{ TcpipNetbiosOptions = 2 } | Out-Null
+          }
+      tags: [netbios, cis_l1]
+
+    ###########################################################################
+    # NTLM / LSA / ANONYMOUS
+    ###########################################################################
+    - name: NTLM | Forcar NTLMv2 somente
+      ansible.windows.win_regedit:
+        path: 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa'
+        name: LmCompatibilityLevel
+        data: 5
+        type: dword
+      tags: [ntlm, cis_l1]
+
+    - name: LSA | Nao armazenar LM Hash
+      ansible.windows.win_regedit:
+        path: 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa'
+        name: NoLMHash
+        data: 1
+        type: dword
+      tags: [lsa, cis_l1]
+
+    - name: Anonymous | Restringir enumeracao anonima
+      ansible.windows.win_regedit:
+        path: 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa'
+        name: RestrictAnonymous
+        data: 1
+        type: dword
+      tags: [anonymous, cis_l1]
+
+    - name: Anonymous | Restringir enumeracao anonima de SAM
+      ansible.windows.win_regedit:
+        path: 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa'
+        name: RestrictAnonymousSAM
+        data: 1
+        type: dword
+      tags: [anonymous, cis_l1]
+
+    - name: Anonymous | Remover Everyone de sessoes anonimas
+      ansible.windows.win_regedit:
+        path: 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa'
+        name: EveryoneIncludesAnonymous
+        data: 0
+        type: dword
+      tags: [anonymous, cis_l1]
+
+    ###########################################################################
+    # LOCAL ACCOUNTS
+    ###########################################################################
+    - name: Local Accounts | Desabilitar Guest local
+      ansible.windows.win_user:
+        name: Guest
+        account_disabled: true
+      tags: [guest, cis_l1]
+
+    - name: Local Accounts | Renomear Administrator/Administrador para desiguadoido e gerar senha aleatoria
+      ansible.windows.win_powershell:
+        script: |
+          $target = '{{ ams_admin_target_name }}'
+          $candidateNames = @('{{ ams_admin_candidate_names | join("','") }}')
+
+          if ([string]::IsNullOrWhiteSpace($target)) {
+            throw 'ams_admin_target_name nao pode ser vazio.'
+          }
+
+          $allUsers = Get-LocalUser
+          $rid500 = $allUsers | Where-Object { $_.SID.Value -match '-500$' }
+          $namedCandidates = $allUsers | Where-Object { $candidateNames -contains $_.Name }
+
+          $accounts = @()
+          if ($null -ne $rid500) { $accounts += $rid500 }
+          if ($null -ne $namedCandidates) { $accounts += $namedCandidates }
+          $accounts = $accounts | Sort-Object SID -Unique
+
+          if ($accounts.Count -eq 0) {
+            throw 'Nenhuma conta local Administrator/Administrador ou RID-500 foi encontrada.'
+          }
+
+          if ($accounts.Count -gt 1) {
+            $found = ($accounts | ForEach-Object { "$($_.Name) [$($_.SID.Value)]" }) -join ', '
+            throw "Foram encontradas mais de uma conta distinta candidata ($found). O Windows nao permite renomear duas contas diferentes para o mesmo nome '$target'. Corrija manualmente ou defina uma estrategia de nomes exclusivos."
+          }
+
+          $account = $accounts[0]
+          if ($target -ieq '{{ ams_expected_awx_user }}') {
+            throw "Nao use $target como nome da conta RID-500, pois ele conflita com o usuario operacional do AWX."
+          }
+
+          $existingTarget = Get-LocalUser -Name $target -ErrorAction SilentlyContinue
+          if ($null -ne $existingTarget -and $existingTarget.SID.Value -ne $account.SID.Value) {
+            throw "Ja existe uma conta local chamada '$target' com SID diferente. Abortando para evitar colisao."
+          }
+
+          $length = [int]'{{ ams_admin_password_length }}'
+          if ($length -lt 24) { $length = 24 }
+
+          Add-Type -AssemblyName System.Web
+          $password = [System.Web.Security.Membership]::GeneratePassword($length, 8)
+          while ($password -notmatch '[a-z]' -or $password -notmatch '[A-Z]' -or $password -notmatch '[0-9]' -or $password -notmatch '[^a-zA-Z0-9]') {
+            $password = [System.Web.Security.Membership]::GeneratePassword($length, 8)
+          }
+
+          if ($account.Name -ne $target) {
+            Rename-LocalUser -Name $account.Name -NewName $target
+          }
+
+          $securePassword = ConvertTo-SecureString $password -AsPlainText -Force
+          Set-LocalUser -Name $target -Password $securePassword
+          Enable-LocalUser -Name $target
+
+          [PSCustomObject]@{
+            AccountName = $target
+            OriginalName = $account.Name
+            SID = $account.SID.Value
+            Password = $password
+            CredentialName = "{{ ams_awx_admin_credential_prefix }} - {{ inventory_hostname }} - $target"
+          } | ConvertTo-Json -Compress
+      register: ams_admin_account_result
+      no_log: true
+      tags: [administrator, local_accounts, cis_l1, awx_credentials]
+
+    - name: AWX Credentials | Validar variaveis obrigatorias para armazenar senha no AWX
+      when: ams_store_admin_password_in_awx | bool
+      ansible.builtin.assert:
+        that:
+          - ams_awx_controller_url | length > 0
+          - ams_awx_oauth_token | length > 0
+          - ams_awx_organization_name | length > 0
+          - ams_awx_machine_credential_type_name | length > 0
+        fail_msg: "Para armazenar a senha em Credentials no AWX, informe ams_awx_controller_url e ams_awx_oauth_token via Survey/extra_vars/Credential Type customizado."
+      no_log: true
+      delegate_to: localhost
+      tags: [administrator, local_accounts, cis_l1, awx_credentials]
+
+    - name: AWX Credentials | Preparar facts sensiveis da conta local
+      when: ams_store_admin_password_in_awx | bool
+      ansible.builtin.set_fact:
+        ams_admin_account_secret: "{{ ams_admin_account_result.output[0] | from_json }}"
+      no_log: true
+      tags: [administrator, local_accounts, cis_l1, awx_credentials]
+
+    - name: AWX Credentials | Obter organizacao no AWX
+      when: ams_store_admin_password_in_awx | bool
+      ansible.builtin.uri:
+        url: "{{ ams_awx_controller_url | regex_replace('/$', '') }}/api/v2/organizations/?name={{ ams_awx_organization_name | urlencode }}"
+        method: GET
+        headers:
+          Authorization: "Bearer {{ ams_awx_oauth_token }}"
+        validate_certs: "{{ ams_awx_validate_certs | bool }}"
+        return_content: true
+      register: ams_awx_org_lookup
+      no_log: true
+      delegate_to: localhost
+      tags: [administrator, local_accounts, cis_l1, awx_credentials]
+
+    - name: AWX Credentials | Obter Credential Type Machine no AWX
+      when: ams_store_admin_password_in_awx | bool
+      ansible.builtin.uri:
+        url: "{{ ams_awx_controller_url | regex_replace('/$', '') }}/api/v2/credential_types/?name={{ ams_awx_machine_credential_type_name | urlencode }}"
+        method: GET
+        headers:
+          Authorization: "Bearer {{ ams_awx_oauth_token }}"
+        validate_certs: "{{ ams_awx_validate_certs | bool }}"
+        return_content: true
+      register: ams_awx_credential_type_lookup
+      no_log: true
+      delegate_to: localhost
+      tags: [administrator, local_accounts, cis_l1, awx_credentials]
+
+    - name: AWX Credentials | Validar organizacao e credential type encontrados
+      when: ams_store_admin_password_in_awx | bool
+      ansible.builtin.assert:
+        that:
+          - (ams_awx_org_lookup.json.count | int) > 0
+          - (ams_awx_credential_type_lookup.json.count | int) > 0
+        fail_msg: "Organizacao ou Credential Type nao encontrados no AWX. Verifique ams_awx_organization_name e ams_awx_machine_credential_type_name."
+      no_log: true
+      delegate_to: localhost
+      tags: [administrator, local_accounts, cis_l1, awx_credentials]
+
+    - name: AWX Credentials | Procurar credential existente para desiguadoido
+      when: ams_store_admin_password_in_awx | bool
+      ansible.builtin.uri:
+        url: "{{ ams_awx_controller_url | regex_replace('/$', '') }}/api/v2/credentials/?name={{ ams_admin_account_secret.CredentialName | urlencode }}&organization={{ ams_awx_org_lookup.json.results[0].id }}"
+        method: GET
+        headers:
+          Authorization: "Bearer {{ ams_awx_oauth_token }}"
+        validate_certs: "{{ ams_awx_validate_certs | bool }}"
+        return_content: true
+      register: ams_awx_existing_credential
+      no_log: true
+      delegate_to: localhost
+      tags: [administrator, local_accounts, cis_l1, awx_credentials]
+
+    - name: AWX Credentials | Criar credential Machine no AWX para desiguadoido
+      when:
+        - ams_store_admin_password_in_awx | bool
+        - (ams_awx_existing_credential.json.count | int) == 0
+      ansible.builtin.uri:
+        url: "{{ ams_awx_controller_url | regex_replace('/$', '') }}/api/v2/credentials/"
+        method: POST
+        headers:
+          Authorization: "Bearer {{ ams_awx_oauth_token }}"
+          Content-Type: "application/json"
+        validate_certs: "{{ ams_awx_validate_certs | bool }}"
+        status_code: [200, 201]
+        body_format: json
+        body:
+          name: "{{ ams_admin_account_secret.CredentialName }}"
+          organization: "{{ ams_awx_org_lookup.json.results[0].id }}"
+          credential_type: "{{ ams_awx_credential_type_lookup.json.results[0].id }}"
+          inputs:
+            username: "{{ ams_admin_account_secret.AccountName }}"
+            password: "{{ ams_admin_account_secret.Password }}"
+      no_log: true
+      delegate_to: localhost
+      tags: [administrator, local_accounts, cis_l1, awx_credentials]
+
+    - name: AWX Credentials | Atualizar credential Machine existente no AWX para desiguadoido
+      when:
+        - ams_store_admin_password_in_awx | bool
+        - (ams_awx_existing_credential.json.count | int) > 0
+      ansible.builtin.uri:
+        url: "{{ ams_awx_controller_url | regex_replace('/$', '') }}/api/v2/credentials/{{ ams_awx_existing_credential.json.results[0].id }}/"
+        method: PATCH
+        headers:
+          Authorization: "Bearer {{ ams_awx_oauth_token }}"
+          Content-Type: "application/json"
+        validate_certs: "{{ ams_awx_validate_certs | bool }}"
+        status_code: [200, 202]
+        body_format: json
+        body:
+          inputs:
+            username: "{{ ams_admin_account_secret.AccountName }}"
+            password: "{{ ams_admin_account_secret.Password }}"
+      no_log: true
+      delegate_to: localhost
+      tags: [administrator, local_accounts, cis_l1, awx_credentials]
+
+    ###########################################################################
+    # CREDENTIAL GUARD
+    ###########################################################################
+    - name: Credential Guard | Habilitar Virtualization Based Security
+      when: ams_enable_credential_guard | bool
+      ansible.windows.win_regedit:
+        path: 'HKLM:\SYSTEM\CurrentControlSet\Control\DeviceGuard'
+        name: EnableVirtualizationBasedSecurity
+        data: 1
+        type: dword
+      tags: [credential_guard, cis_l1]
+
+    - name: Credential Guard | Exigir protecao por Secure Boot quando disponivel
+      when: ams_enable_credential_guard | bool
+      ansible.windows.win_regedit:
+        path: 'HKLM:\SYSTEM\CurrentControlSet\Control\DeviceGuard'
+        name: RequirePlatformSecurityFeatures
+        data: 1
+        type: dword
+      tags: [credential_guard, cis_l1]
+
+    - name: Credential Guard | Configurar LSA Protection
+      when: ams_enable_credential_guard | bool
+      ansible.windows.win_regedit:
+        path: 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa'
+        name: LsaCfgFlags
+        data: 1
+        type: dword
+      tags: [credential_guard, cis_l1]
+
+    ###########################################################################
+    # TLS / SCHANNEL
+    ###########################################################################
+    - name: TLS | Desabilitar protocolos legados SSL/TLS antigos no Server e Client
+      ansible.windows.win_regedit:
+        path: "HKLM:\\SYSTEM\\CurrentControlSet\\Control\\SecurityProviders\\SCHANNEL\\Protocols\\{{ item.protocol }}\\{{ item.role }}"
+        name: "{{ item.name }}"
+        data: "{{ item.data }}"
+        type: dword
+      loop:
+        - { protocol: 'SSL 2.0', role: 'Server', name: 'Enabled', data: 0 }
+        - { protocol: 'SSL 2.0', role: 'Server', name: 'DisabledByDefault', data: 1 }
+        - { protocol: 'SSL 2.0', role: 'Client', name: 'Enabled', data: 0 }
+        - { protocol: 'SSL 2.0', role: 'Client', name: 'DisabledByDefault', data: 1 }
+        - { protocol: 'SSL 3.0', role: 'Server', name: 'Enabled', data: 0 }
+        - { protocol: 'SSL 3.0', role: 'Server', name: 'DisabledByDefault', data: 1 }
+        - { protocol: 'SSL 3.0', role: 'Client', name: 'Enabled', data: 0 }
+        - { protocol: 'SSL 3.0', role: 'Client', name: 'DisabledByDefault', data: 1 }
+        - { protocol: 'TLS 1.0', role: 'Server', name: 'Enabled', data: 0 }
+        - { protocol: 'TLS 1.0', role: 'Server', name: 'DisabledByDefault', data: 1 }
+        - { protocol: 'TLS 1.0', role: 'Client', name: 'Enabled', data: 0 }
+        - { protocol: 'TLS 1.0', role: 'Client', name: 'DisabledByDefault', data: 1 }
+        - { protocol: 'TLS 1.1', role: 'Server', name: 'Enabled', data: 0 }
+        - { protocol: 'TLS 1.1', role: 'Server', name: 'DisabledByDefault', data: 1 }
+        - { protocol: 'TLS 1.1', role: 'Client', name: 'Enabled', data: 0 }
+        - { protocol: 'TLS 1.1', role: 'Client', name: 'DisabledByDefault', data: 1 }
+      tags: [tls, schannel, cis_l1]
+
+    - name: TLS | Habilitar TLS 1.2 Server e Client
+      ansible.windows.win_regedit:
+        path: "HKLM:\\SYSTEM\\CurrentControlSet\\Control\\SecurityProviders\\SCHANNEL\\Protocols\\TLS 1.2\\{{ item.role }}"
+        name: "{{ item.name }}"
+        data: "{{ item.data }}"
+        type: dword
+      loop:
+        - { role: 'Server', name: 'Enabled', data: 1 }
+        - { role: 'Server', name: 'DisabledByDefault', data: 0 }
+        - { role: 'Client', name: 'Enabled', data: 1 }
+        - { role: 'Client', name: 'DisabledByDefault', data: 0 }
+      tags: [tls, schannel, cis_l1]
+
+    - name: TLS | Habilitar TLS 1.3 quando suportado
+      when: ams_enable_tls13_when_supported | bool
+      ansible.windows.win_regedit:
+        path: "HKLM:\\SYSTEM\\CurrentControlSet\\Control\\SecurityProviders\\SCHANNEL\\Protocols\\TLS 1.3\\{{ item.role }}"
+        name: "{{ item.name }}"
+        data: "{{ item.data }}"
+        type: dword
+      loop:
+        - { role: 'Server', name: 'Enabled', data: 1 }
+        - { role: 'Server', name: 'DisabledByDefault', data: 0 }
+        - { role: 'Client', name: 'Enabled', data: 1 }
+        - { role: 'Client', name: 'DisabledByDefault', data: 0 }
+      tags: [tls, schannel, cis_l1]
+
+    ###########################################################################
+    # EVENT LOGS
+    ###########################################################################
+    - name: Event Logs | Configurar tamanho e retencao dos logs principais
+      ansible.windows.win_powershell:
+        script: |
+          $logs = @{
+            Security    = {{ ams_eventlog_security_max_size_mb | int }} * 1MB
+            Application = {{ ams_eventlog_application_max_size_mb | int }} * 1MB
+            System      = {{ ams_eventlog_system_max_size_mb | int }} * 1MB
+          }
+          foreach ($log in $logs.Keys) {
+            wevtutil sl $log /ms:$($logs[$log])
+            if ('{{ ams_eventlog_retention | bool }}' -eq 'True') { wevtutil sl $log /rt:true }
+          }
+      tags: [eventlog, logging, cis_l1]
+
+    ###########################################################################
+    # IPv6
+    ###########################################################################
+    - name: IPv6 | Desabilitar IPv6 via DisabledComponents quando definido
+      when: ams_disable_ipv6 | bool
+      ansible.windows.win_regedit:
+        path: 'HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip6\Parameters'
+        name: DisabledComponents
+        data: 255
+        type: dword
+      tags: [ipv6, cis_l1]
+
+    ###########################################################################
+    # PRINT SPOOLER
+    ###########################################################################
+    - name: Services | Parar e desativar Print Spooler
+      when: ams_disable_spooler | bool
+      ansible.windows.win_service:
+        name: Spooler
+        state: stopped
+        start_mode: disabled
+      tags: [spooler, services, cis_l1]
+
+  post_tasks:
+    - name: Resumo CIS
+      ansible.builtin.debug:
+        msg:
+          - "Servidor: {{ inventory_hostname }}"
+          - "SO: {{ ams_server_info.Caption }} build {{ ams_server_info.BuildNumber }}"
+          - "Domain Member: {{ is_domain_member }}"
+          - "Credential operacional AWX esperado: mabreu"
+          - "Password Policy aplicada somente se standalone: {{ not is_domain_member }}"
+          - "Lockout Policy aplicada somente se standalone: {{ not is_domain_member }}"
+          - "Audit Policy aplicada"
+          - "Firewall aplicado"
+          - "Defender aplicado sem ASR Rules"
+          - "PowerShell Logging aplicado"
+          - "SMBv1 desabilitado/removido quando presente"
+          - "LLMNR desabilitado"
+          - "NetBIOS over TCP/IP desabilitado"
+          - "NTLMv2 forcado"
+          - "Guest desabilitado"
+          - "Administrator/Administrador renomeado para {{ ams_admin_target_name }}"
+          - "Anonymous Enumeration restringida"
+          - "Credential Guard configurado: {{ ams_enable_credential_guard }}"
+          - "TLS hardening aplicado"
+          - "Event Logs configurados"
+          - "IPv6 desativado: {{ ams_disable_ipv6 }}"
+          - "Spooler desativado: {{ ams_disable_spooler }}"
+      tags: [always]
