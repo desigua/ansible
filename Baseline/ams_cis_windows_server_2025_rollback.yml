@@ -10,6 +10,8 @@
     # Forca shell PowerShell independente do metodo de conexao (WinRM ou SSH).
     ansible_shell_type: powershell
     ams_rollback_administrator_to: "Administrator"
+    # Usuario operacional do AWX - nunca e renomeado, mesmo que seja RID-500.
+    ams_expected_awx_user: "mabreu"
 
     # Audit Policy - mesmas subcategorias do hardening, para desabilitar no rollback
     ams_audit_subcategories:
@@ -222,20 +224,6 @@
         account_disabled: false
       tags: [guest, rollback]
 
-    - name: Rollback Administrator | Renomear RID-500 para nome de rollback
-      ansible.windows.win_powershell:
-        script: |
-          $target = '{{ ams_rollback_administrator_to }}'
-          $admin = Get-LocalUser | Where-Object { $_.SID.Value -match '-500$' }
-          if ($null -ne $admin -and $admin.Name -ne $target) {
-            $existing = Get-LocalUser -Name $target -ErrorAction SilentlyContinue
-            if ($null -ne $existing -and $existing.SID.Value -ne $admin.SID.Value) {
-              throw "Ja existe uma conta local chamada '$target' com SID diferente. Rollback abortado para evitar colisao."
-            }
-            Rename-LocalUser -Name $admin.Name -NewName $target
-          }
-      tags: [administrator, rollback]
-
     ###########################################################################
     # ROLLBACK CREDENTIAL GUARD
     ###########################################################################
@@ -317,6 +305,52 @@
         state: started
         start_mode: auto
       tags: [spooler, rollback]
+
+    ###########################################################################
+    # LOCAL ACCOUNTS - RENAME (SEMPRE POR ULTIMO)
+    ###########################################################################
+    # Fica por ultimo como camada extra de protecao. Regra de negocio:
+    #   - Se o RID-500 ja for ams_expected_awx_user (mabreu), nunca e tocado
+    #     (o hardening nunca renomeou essa conta, entao o rollback tambem nao mexe).
+    #   - Se o RID-500 for "desiguadoido" (renomeado pelo hardening), volta
+    #     para ams_rollback_administrator_to (Administrator).
+    - name: Rollback Administrator | Renomear RID-500 para nome de rollback (preservando mabreu)
+      ansible.windows.win_powershell:
+        script: |
+          $target = '{{ ams_rollback_administrator_to }}'
+          $awxUser = '{{ ams_expected_awx_user }}'
+          $currentUser = '{{ ams_server_info.CurrentUser }}'
+          $currentUserShort = $currentUser -replace '^.*\\',''
+
+          $admin = Get-LocalUser | Where-Object { $_.SID.Value -match '-500$' }
+          if ($null -eq $admin) {
+            throw 'Nenhuma conta local RID-500 foi encontrada.'
+          }
+
+          if ($admin.Name -ieq $awxUser) {
+            # RID-500 e o usuario operacional do AWX - nunca foi renomeado
+            # pelo hardening, entao o rollback tambem nao mexe.
+            return
+          }
+
+          if ($admin.Name -ieq $target) {
+            # Ja esta no nome de rollback - idempotente, nada a fazer.
+            return
+          }
+
+          # Trava de auto-bloqueio: se a conta RID-500 e a mesma conta
+          # usada para autenticar nesta sessao, abortar - renomea-la
+          # quebraria a conexao atual e execucoes futuras do AWX.
+          if ($admin.Name -ieq $currentUserShort) {
+            throw "A conta RID-500 encontrada ('$($admin.Name)') e a mesma conta usada para autenticar nesta sessao ($currentUser), mas nao e o usuario operacional esperado ('$awxUser'). Rollback do rename abortado com seguranca."
+          }
+
+          $existing = Get-LocalUser -Name $target -ErrorAction SilentlyContinue
+          if ($null -ne $existing -and $existing.SID.Value -ne $admin.SID.Value) {
+            throw "Ja existe uma conta local chamada '$target' com SID diferente. Rollback abortado para evitar colisao."
+          }
+          Rename-LocalUser -Name $admin.Name -NewName $target
+      tags: [administrator, rollback]
 
   post_tasks:
     - name: Resumo Rollback

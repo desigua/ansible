@@ -13,11 +13,11 @@
     # posix que o Windows nao tem.
     ansible_shell_type: powershell
 
-    # Conta local RID-500 (Administrator/Administrador) a ser renomeada.
+    # Conta local RID-500: identificada pelo SID (nao pelo nome), pois pode
+    # estar como Administrator, Administrador ou ja renomeada.
+    # - Se ja for ams_expected_awx_user (mabreu), a task pula sem tocar.
+    # - Caso contrario, e renomeada para ams_admin_target_name.
     ams_admin_target_name: "desiguadoido"
-    ams_admin_candidate_names:
-      - "Administrator"
-      - "Administrador"
     ams_expected_awx_user: "mabreu"
 
     # Password Policy (aplicada apenas em servidores standalone, fora de dominio)
@@ -352,56 +352,6 @@
         account_disabled: true
       tags: [guest, cis_l1]
 
-    - name: Local Accounts | Renomear Administrator/Administrador para desiguadoido
-      ansible.windows.win_powershell:
-        script: |
-          $target = '{{ ams_admin_target_name }}'
-          $candidateNames = @('{{ ams_admin_candidate_names | join("','") }}')
-
-          if ([string]::IsNullOrWhiteSpace($target)) {
-            throw 'ams_admin_target_name nao pode ser vazio.'
-          }
-
-          $allUsers = Get-LocalUser
-          $rid500 = $allUsers | Where-Object { $_.SID.Value -match '-500$' }
-          $namedCandidates = $allUsers | Where-Object { $candidateNames -contains $_.Name }
-
-          $accounts = @()
-          if ($null -ne $rid500) { $accounts += $rid500 }
-          if ($null -ne $namedCandidates) { $accounts += $namedCandidates }
-          $accounts = $accounts | Sort-Object SID -Unique
-
-          if ($accounts.Count -eq 0) {
-            throw 'Nenhuma conta local Administrator/Administrador ou RID-500 foi encontrada.'
-          }
-
-          if ($accounts.Count -gt 1) {
-            $found = ($accounts | ForEach-Object { "$($_.Name) [$($_.SID.Value)]" }) -join ', '
-            throw "Foram encontradas mais de uma conta distinta candidata ($found). O Windows nao permite renomear duas contas diferentes para o mesmo nome '$target'. Corrija manualmente ou defina uma estrategia de nomes exclusivos."
-          }
-
-          $account = $accounts[0]
-          if ($target -ieq '{{ ams_expected_awx_user }}') {
-            throw "Nao use $target como nome da conta RID-500, pois ele conflita com o usuario operacional do AWX."
-          }
-
-          $existingTarget = Get-LocalUser -Name $target -ErrorAction SilentlyContinue
-          if ($null -ne $existingTarget -and $existingTarget.SID.Value -ne $account.SID.Value) {
-            throw "Ja existe uma conta local chamada '$target' com SID diferente. Abortando para evitar colisao."
-          }
-
-          if ($account.Name -ne $target) {
-            Rename-LocalUser -Name $account.Name -NewName $target
-          }
-
-          [PSCustomObject]@{
-            AccountName = $target
-            OriginalName = $account.Name
-            SID = $account.SID.Value
-          } | ConvertTo-Json -Compress
-      register: ams_admin_account_result
-      tags: [administrator, local_accounts, cis_l1]
-
     ###########################################################################
     # CREDENTIAL GUARD
     ###########################################################################
@@ -526,6 +476,86 @@
         state: stopped
         start_mode: disabled
       tags: [spooler, services, cis_l1]
+
+    ###########################################################################
+    # LOCAL ACCOUNTS - RENAME (SEMPRE POR ULTIMO)
+    ###########################################################################
+    # Esta task fica deliberadamente por ultimo, como camada extra de
+    # protecao (defense in depth) - mesmo que a logica abaixo ja evite tocar
+    # na conta operacional do AWX, rodar por ultimo garante que nenhuma outra
+    # task deste play dependa de reconectar depois de qualquer rename.
+    #
+    # Regra de negocio:
+    #   - O usuario operacional do AWX (ams_expected_awx_user, ex: mabreu)
+    #     NUNCA e renomeado, mesmo que seja a propria conta RID-500. Se o
+    #     RID-500 ja for "mabreu", a task e pulada (host ja em conformidade).
+    #   - Se o RID-500 estiver como "Administrator" ou "Administrador" (ou
+    #     qualquer nome diferente de mabreu/desiguadoido), ele e renomeado
+    #     para "desiguadoido".
+    - name: Local Accounts | Renomear Administrator/Administrador para desiguadoido (preservando mabreu)
+      ansible.windows.win_powershell:
+        script: |
+          $target = '{{ ams_admin_target_name }}'
+          $awxUser = '{{ ams_expected_awx_user }}'
+          $currentUser = '{{ ams_server_info.CurrentUser }}'
+          $currentUserShort = $currentUser -replace '^.*\\',''
+
+          if ([string]::IsNullOrWhiteSpace($target)) {
+            throw 'ams_admin_target_name nao pode ser vazio.'
+          }
+
+          $rid500 = Get-LocalUser | Where-Object { $_.SID.Value -match '-500$' }
+          if ($null -eq $rid500) {
+            throw 'Nenhuma conta local RID-500 foi encontrada.'
+          }
+
+          # Regra 1: o usuario operacional do AWX nunca e renomeado.
+          # Se o RID-500 ja e essa conta (ex: mabreu), o host ja esta em
+          # conformidade - nada a fazer.
+          if ($rid500.Name -ieq $awxUser) {
+            [PSCustomObject]@{
+              AccountName = $rid500.Name
+              OriginalName = $rid500.Name
+              SID = $rid500.SID.Value
+              Action = 'skipped-already-awx-user'
+            } | ConvertTo-Json -Compress
+            return
+          }
+
+          # Ja esta no nome alvo - idempotente, nada a fazer.
+          if ($rid500.Name -ieq $target) {
+            [PSCustomObject]@{
+              AccountName = $rid500.Name
+              OriginalName = $rid500.Name
+              SID = $rid500.SID.Value
+              Action = 'skipped-already-target'
+            } | ConvertTo-Json -Compress
+            return
+          }
+
+          # Trava de auto-bloqueio: se por algum motivo o RID-500 for a
+          # propria conta autenticando esta sessao (mesmo nao sendo o
+          # awxUser esperado), abortar - renomea-la quebraria a conexao
+          # atual e execucoes futuras do AWX com esta Credential.
+          if ($rid500.Name -ieq $currentUserShort) {
+            throw "A conta RID-500 encontrada ('$($rid500.Name)') e a mesma conta usada para autenticar nesta sessao ($currentUser), mas nao e o usuario operacional esperado ('$awxUser'). Abortando com seguranca para nao quebrar a conexao atual."
+          }
+
+          $existingTarget = Get-LocalUser -Name $target -ErrorAction SilentlyContinue
+          if ($null -ne $existingTarget -and $existingTarget.SID.Value -ne $rid500.SID.Value) {
+            throw "Ja existe uma conta local chamada '$target' com SID diferente. Abortando para evitar colisao."
+          }
+
+          Rename-LocalUser -Name $rid500.Name -NewName $target
+
+          [PSCustomObject]@{
+            AccountName = $target
+            OriginalName = $rid500.Name
+            SID = $rid500.SID.Value
+            Action = 'renamed'
+          } | ConvertTo-Json -Compress
+      register: ams_admin_account_result
+      tags: [administrator, local_accounts, cis_l1]
 
   post_tasks:
     - name: Resumo CIS
