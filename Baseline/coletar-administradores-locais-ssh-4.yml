@@ -1,0 +1,155 @@
+---
+- name: Coletar administradores locais SSH
+  hosts: all
+  gather_facts: false
+
+  tasks:
+
+    - name: Criar pasta C:\Temp
+      raw: |
+        New-Item -Path 'C:\Temp' -ItemType Directory -Force
+
+    - name: Gerar relatório de administradores locais
+      raw: |
+        powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "
+
+        \$hostname = hostname
+
+        \$permitidos = 'mabreu','mabra'
+
+        \$saida = @()
+
+        \$saida += '========================================='
+        \$saida += 'Servidor: ' + \$hostname
+        \$saida += 'Data: ' + (Get-Date)
+        \$saida += '========================================='
+        \$saida += ''
+        \$saida += 'ADMINISTRADORES LOCAIS:'
+        \$saida += ''
+
+        try {
+
+            \$admins = Get-LocalGroupMember -Group 'Administrators' | Sort-Object Name
+
+            \$encontrados = @()
+            \$extras = @()
+
+            foreach (\$admin in \$admins) {
+
+                \$saida += (\$admin.Name + ' [' + \$admin.ObjectClass + ']')
+
+                \$usuario = \$admin.Name.ToLower().Trim()
+
+                \$encontrados += \$usuario
+
+                \$autorizado = \$false
+
+                foreach (\$permitido in \$permitidos) {
+
+                    if (\$usuario.EndsWith(\$permitido.ToLower())) {
+                        \$autorizado = \$true
+                        break
+                    }
+
+                }
+
+                if (-not \$autorizado) {
+                    \$extras += \$admin.Name
+                }
+
+            }
+
+            \$faltando = @()
+
+            foreach (\$permitido in \$permitidos) {
+
+                \$existe = \$false
+
+                foreach (\$usuario in \$encontrados) {
+
+                    if (\$usuario.EndsWith(\$permitido.ToLower())) {
+                        \$existe = \$true
+                        break
+                    }
+
+                }
+
+                if (-not \$existe) {
+                    \$faltando += \$permitido
+                }
+
+            }
+
+            \$saida += ''
+            \$saida += 'VALIDACAO:'
+            \$saida += '============'
+            \$saida += ''
+
+            \$saida += 'ADMINISTRADORES PERMITIDOS:'
+
+            foreach (\$permitido in \$permitidos) {
+                \$saida += ' - ' + \$permitido
+            }
+
+            \$saida += ''
+
+            if (\$faltando.Count -eq 0) {
+
+                \$saida += 'CONTAS OBRIGATORIAS: OK'
+
+            }
+            else {
+
+                \$saida += 'CONTAS FALTANDO:'
+
+                foreach (\$item in \$faltando) {
+                    \$saida += ' - ' + \$item
+                }
+
+            }
+
+            \$saida += ''
+
+            if (\$extras.Count -eq 0) {
+
+                \$saida += 'ADMINISTRADORES EXTRAS: NENHUM'
+
+            }
+            else {
+
+                \$saida += 'ADMINISTRADORES EXTRAS:'
+
+                foreach (\$item in \$extras) {
+                    \$saida += ' - ' + \$item
+                }
+
+            }
+
+            \$saida += ''
+
+            if ((\$faltando.Count -eq 0) -and (\$extras.Count -eq 0)) {
+                \$saida += 'STATUS: COMPLIANT'
+            }
+            else {
+                \$saida += 'STATUS: NON-COMPLIANT'
+            }
+
+        }
+        catch {
+
+            \$saida += ''
+            \$saida += 'ERRO AO CONSULTAR ADMINISTRADORES:'
+            \$saida += \$_.Exception.Message
+
+        }
+
+        \$saida | Out-File -FilePath 'C:\Temp\adm.txt' -Encoding UTF8 -Force
+
+        Get-Content 'C:\Temp\adm.txt'
+
+        "
+      register: resultado
+
+    - name: Exibir resultado no AWX
+      debug:
+        var: resultado.stdout_lines
