@@ -1,0 +1,12 @@
+---
+- name: Teste SSH
+  hosts: all
+  gather_facts: false
+
+  tasks:
+    - name: Hostname
+      raw: hostname
+      register: resultado
+
+    - debug:
+        var: resultado.stdout
