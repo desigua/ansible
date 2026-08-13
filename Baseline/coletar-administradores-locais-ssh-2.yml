@@ -3,118 +3,35 @@
   hosts: all
   gather_facts: false
 
+  vars:
+    administradores_permitidos:
+      - mabreu
+      - mabra
+
   tasks:
 
     - name: Criar pasta C:\Temp
       raw: |
-        cmd /c mkdir C:\Temp 2>NUL
+        New-Item -Path 'C:\Temp' -ItemType Directory -Force
+      register: pasta
 
     - name: Coletar administradores locais
       raw: |
-        powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "
-        \$hostname = hostname
+        $hostname = hostname
 
-        \$permitidos = @(
-            'mabreu',
-            'mabra'
-        )
+        $saida = @()
 
-        \$saida = @()
+        $saida += "========================================="
+        $saida += "Servidor: $hostname"
+        $saida += "Data: $(Get-Date -Format 'dd/MM/yyyy HH:mm:ss')"
+        $saida += "========================================="
+        $saida += ""
+        $saida += "ADMINISTRADORES LOCAIS"
+        $saida += ""
 
-        \$saida += '========================================='
-        \$saida += 'Servidor: ' + \$hostname
-        \$saida += 'Data: ' + (Get-Date -Format 'dd/MM/yyyy HH:mm:ss')
-        \$saida += '========================================='
-        \$saida += ''
+        net localgroup Administrators
+      register: admins
 
-        \$saida += 'ADMINISTRADORES LOCAIS:'
-        \$saida += ''
-
-        \$admins = net localgroup Administrators
-
-        \$captura = \$false
-        \$encontrados = @()
-
-        foreach (\$linha in \$admins)
-        {
-            \$linha = \$linha.Trim()
-
-            if (\$linha -match '^---')
-            {
-                \$captura = \$true
-                continue
-            }
-
-            if (\$linha -match 'The command completed successfully')
-            {
-                break
-            }
-
-            if (\$captura -and \$linha -ne '')
-            {
-                \$saida += \$linha
-                \$encontrados += \$linha.ToLower()
-            }
-        }
-
-        \$saida += ''
-        \$saida += 'VALIDACAO'
-        \$saida += '========='
-        \$saida += ''
-
-        \$faltando = @()
-
-        foreach (\$permitido in \$permitidos)
-        {
-            \$achou = \$false
-
-            foreach (\$conta in \$encontrados)
-            {
-                if (\$conta -like '*' + \$permitido.ToLower())
-                {
-                    \$achou = \$true
-                    break
-                }
-            }
-
-            if (-not \$achou)
-            {
-                \$faltando += \$permitido
-            }
-        }
-
-        if (\$faltando.Count -eq 0)
-        {
-            \$saida += 'CONTAS OBRIGATORIAS: OK'
-        }
-        else
-        {
-            \$saida += 'CONTAS FALTANDO:'
-
-            foreach (\$item in \$faltando)
-            {
-                \$saida += (' - ' + \$item)
-            }
-        }
-
-        \$saida += ''
-        \$saida += 'STATUS FINAL'
-
-        if (\$faltando.Count -eq 0)
-        {
-            \$saida += 'COMPLIANT'
-        }
-        else
-        {
-            \$saida += 'NON-COMPLIANT'
-        }
-
-        \$saida | Out-File 'C:\Temp\adm.txt' -Encoding UTF8 -Force
-
-        Get-Content 'C:\Temp\adm.txt'
-        "
-      register: resultado
-
-    - name: Exibir resultado no AWX
+    - name: Exibir resultado
       debug:
-        var: resultado.stdout_lines
+        var: admins.stdout_lines
