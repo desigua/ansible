@@ -11,6 +11,30 @@
     ansible_shell_type: powershell
     ams_rollback_administrator_to: "Administrator"
 
+    # Audit Policy - mesmas subcategorias do hardening, para desabilitar no rollback
+    ams_audit_subcategories:
+      - "Credential Validation"
+      - "Kerberos Authentication Service"
+      - "Kerberos Service Ticket Operations"
+      - "Computer Account Management"
+      - "Other Account Management Events"
+      - "Security Group Management"
+      - "User Account Management"
+      - "Process Creation"
+      - "Logoff"
+      - "Logon"
+      - "Special Logon"
+      - "Account Lockout"
+      - "Policy Change"
+      - "Sensitive Privilege Use"
+      - "System Integrity"
+
+    # Rollback seguro: por padrao nao reabilita protocolos legados perigosos
+    ams_rollback_enable_legacy_protocols: false
+    ams_rollback_enable_spooler: false
+    ams_rollback_enable_ipv6: false
+    ams_rollback_disable_credential_guard: true
+
   pre_tasks:
     - name: Rollback Precheck | Detectar metodo de conexao (WinRM ou SSH)
       ansible.builtin.debug:

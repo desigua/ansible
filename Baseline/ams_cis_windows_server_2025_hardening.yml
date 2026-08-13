@@ -20,6 +20,47 @@
       - "Administrador"
     ams_expected_awx_user: "mabreu"
 
+    # Password Policy (aplicada apenas em servidores standalone, fora de dominio)
+    ams_password_history_size: 24
+    ams_maximum_password_age: 90
+    ams_minimum_password_length: 9
+    ams_password_complexity: 1
+
+    # Account Lockout (aplicada apenas em servidores standalone, fora de dominio)
+    ams_lockout_bad_count: 5
+    ams_lockout_duration: 15
+    ams_reset_lockout_count: 15
+
+    # Audit Policy - subcategorias avancadas habilitadas (sucesso e falha)
+    ams_audit_subcategories:
+      - "Credential Validation"
+      - "Kerberos Authentication Service"
+      - "Kerberos Service Ticket Operations"
+      - "Computer Account Management"
+      - "Other Account Management Events"
+      - "Security Group Management"
+      - "User Account Management"
+      - "Process Creation"
+      - "Logoff"
+      - "Logon"
+      - "Special Logon"
+      - "Account Lockout"
+      - "Policy Change"
+      - "Sensitive Privilege Use"
+      - "System Integrity"
+
+    # Event Log - tamanho maximo e retencao
+    ams_eventlog_security_max_size_mb: 256
+    ams_eventlog_application_max_size_mb: 128
+    ams_eventlog_system_max_size_mb: 128
+    ams_eventlog_retention: true
+
+    # Controles opcionais de hardening
+    ams_disable_ipv6: true
+    ams_disable_spooler: true
+    ams_enable_credential_guard: true
+    ams_enable_tls13_when_supported: true
+
   pre_tasks:
     - name: Precheck | Detectar metodo de conexao (WinRM ou SSH)
       ansible.builtin.debug:
