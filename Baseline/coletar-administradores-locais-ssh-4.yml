@@ -1,155 +1,137 @@
 ---
-- name: Coletar administradores locais SSH
+- name: Coletar administradores locais via SSH
   hosts: all
   gather_facts: false
 
-  tasks:
+  vars:
+    administradores_permitidos:
+      - mabreu
+      - mabra
+    caminho_relatorio: 'C:\Temp\adm.txt'
 
+  tasks:
     - name: Criar pasta C:\Temp
-      raw: |
-        New-Item -Path 'C:\Temp' -ItemType Directory -Force
+      ansible.builtin.raw: |
+        New-Item -Path 'C:\Temp' -ItemType Directory -Force | Out-Null
+      changed_when: false
 
     - name: Gerar relatório de administradores locais
-      raw: |
-        powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "
+      ansible.builtin.raw: |
+        $hostname = $env:COMPUTERNAME
+        $permitidos = @('{{ administradores_permitidos | join("','") }}')
+        $caminhoRelatorio = '{{ caminho_relatorio }}'
+        $saida = [System.Collections.Generic.List[string]]::new()
 
-        \$hostname = hostname
-
-        \$permitidos = 'mabreu','mabra'
-
-        \$saida = @()
-
-        \$saida += '========================================='
-        \$saida += 'Servidor: ' + \$hostname
-        \$saida += 'Data: ' + (Get-Date)
-        \$saida += '========================================='
-        \$saida += ''
-        \$saida += 'ADMINISTRADORES LOCAIS:'
-        \$saida += ''
+        $saida.Add('=========================================')
+        $saida.Add("Servidor: $hostname")
+        $saida.Add("Data: $(Get-Date -Format 'dd/MM/yyyy HH:mm:ss')")
+        $saida.Add('=========================================')
+        $saida.Add('')
+        $saida.Add('ADMINISTRADORES LOCAIS:')
+        $saida.Add('')
 
         try {
+            $admins = @(Get-LocalGroupMember -Group 'Administrators' -ErrorAction Stop | Sort-Object Name)
+            $encontrados = [System.Collections.Generic.List[string]]::new()
+            $extras = [System.Collections.Generic.List[string]]::new()
 
-            \$admins = Get-LocalGroupMember -Group 'Administrators' | Sort-Object Name
+            foreach ($admin in $admins) {
+                $saida.Add("$($admin.Name) [$($admin.ObjectClass)]")
+                $usuario = $admin.Name.ToString().ToLowerInvariant().Trim()
+                $encontrados.Add($usuario)
+                $autorizado = $false
 
-            \$encontrados = @()
-            \$extras = @()
+                foreach ($permitido in $permitidos) {
+                    $permitidoNormalizado = $permitido.ToString().ToLowerInvariant().Trim()
+                    $nomeSemDominio = ($usuario -split '\\')[-1]
 
-            foreach (\$admin in \$admins) {
-
-                \$saida += (\$admin.Name + ' [' + \$admin.ObjectClass + ']')
-
-                \$usuario = \$admin.Name.ToLower().Trim()
-
-                \$encontrados += \$usuario
-
-                \$autorizado = \$false
-
-                foreach (\$permitido in \$permitidos) {
-
-                    if (\$usuario.EndsWith(\$permitido.ToLower())) {
-                        \$autorizado = \$true
+                    if ($nomeSemDominio -eq $permitidoNormalizado) {
+                        $autorizado = $true
                         break
                     }
-
                 }
 
-                if (-not \$autorizado) {
-                    \$extras += \$admin.Name
+                if (-not $autorizado) {
+                    $extras.Add($admin.Name.ToString())
                 }
-
             }
 
-            \$faltando = @()
+            $faltando = [System.Collections.Generic.List[string]]::new()
 
-            foreach (\$permitido in \$permitidos) {
+            foreach ($permitido in $permitidos) {
+                $permitidoNormalizado = $permitido.ToString().ToLowerInvariant().Trim()
+                $existe = $false
 
-                \$existe = \$false
+                foreach ($usuario in $encontrados) {
+                    $nomeSemDominio = ($usuario -split '\\')[-1]
 
-                foreach (\$usuario in \$encontrados) {
-
-                    if (\$usuario.EndsWith(\$permitido.ToLower())) {
-                        \$existe = \$true
+                    if ($nomeSemDominio -eq $permitidoNormalizado) {
+                        $existe = $true
                         break
                     }
-
                 }
 
-                if (-not \$existe) {
-                    \$faltando += \$permitido
+                if (-not $existe) {
+                    $faltando.Add($permitido.ToString())
                 }
-
             }
 
-            \$saida += ''
-            \$saida += 'VALIDACAO:'
-            \$saida += '============'
-            \$saida += ''
+            $saida.Add('')
+            $saida.Add('VALIDACAO:')
+            $saida.Add('============')
+            $saida.Add('')
+            $saida.Add('ADMINISTRADORES PERMITIDOS:')
 
-            \$saida += 'ADMINISTRADORES PERMITIDOS:'
-
-            foreach (\$permitido in \$permitidos) {
-                \$saida += ' - ' + \$permitido
+            foreach ($permitido in $permitidos) {
+                $saida.Add(" - $permitido")
             }
 
-            \$saida += ''
+            $saida.Add('')
 
-            if (\$faltando.Count -eq 0) {
-
-                \$saida += 'CONTAS OBRIGATORIAS: OK'
-
+            if ($faltando.Count -eq 0) {
+                $saida.Add('CONTAS OBRIGATORIAS: OK')
             }
             else {
-
-                \$saida += 'CONTAS FALTANDO:'
-
-                foreach (\$item in \$faltando) {
-                    \$saida += ' - ' + \$item
+                $saida.Add('CONTAS FALTANDO:')
+                foreach ($item in $faltando) {
+                    $saida.Add(" - $item")
                 }
-
             }
 
-            \$saida += ''
+            $saida.Add('')
 
-            if (\$extras.Count -eq 0) {
-
-                \$saida += 'ADMINISTRADORES EXTRAS: NENHUM'
-
+            if ($extras.Count -eq 0) {
+                $saida.Add('ADMINISTRADORES EXTRAS: NENHUM')
             }
             else {
-
-                \$saida += 'ADMINISTRADORES EXTRAS:'
-
-                foreach (\$item in \$extras) {
-                    \$saida += ' - ' + \$item
+                $saida.Add('ADMINISTRADORES EXTRAS:')
+                foreach ($item in $extras) {
+                    $saida.Add(" - $item")
                 }
-
             }
 
-            \$saida += ''
+            $saida.Add('')
 
-            if ((\$faltando.Count -eq 0) -and (\$extras.Count -eq 0)) {
-                \$saida += 'STATUS: COMPLIANT'
+            if (($faltando.Count -eq 0) -and ($extras.Count -eq 0)) {
+                $saida.Add('STATUS: COMPLIANT')
             }
             else {
-                \$saida += 'STATUS: NON-COMPLIANT'
+                $saida.Add('STATUS: NON-COMPLIANT')
             }
-
         }
         catch {
-
-            \$saida += ''
-            \$saida += 'ERRO AO CONSULTAR ADMINISTRADORES:'
-            \$saida += \$_.Exception.Message
-
+            $saida.Add('')
+            $saida.Add('ERRO AO CONSULTAR ADMINISTRADORES:')
+            $saida.Add($_.Exception.Message)
+            $saida.Add('')
+            $saida.Add('STATUS: ERRO')
         }
 
-        \$saida | Out-File -FilePath 'C:\Temp\adm.txt' -Encoding UTF8 -Force
-
-        Get-Content 'C:\Temp\adm.txt'
-
-        "
+        $saida | Set-Content -Path $caminhoRelatorio -Encoding UTF8 -Force
+        $saida
       register: resultado
+      changed_when: true
 
     - name: Exibir resultado no AWX
-      debug:
+      ansible.builtin.debug:
         var: resultado.stdout_lines
