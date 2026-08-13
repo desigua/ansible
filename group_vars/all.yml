@@ -1,6 +1,6 @@
 ---
 # AMS CIS Windows Server Hardening - variaveis globais para AWX
-# Compatibilidade alvo: Windows Server 2019, 2022 e 2025.
+# Compatibilidade alvo: Windows Server 2019, 2022 e 2025
 # Usuario operacional esperado no Credential do AWX: mabreu.
 # Nao coloque senha neste arquivo. Senhas devem ficar em AWX Credential, Ansible Vault ou cofre externo.
 
