@@ -7,6 +7,12 @@
     - community.windows
 
   vars:
+    # Forca shell PowerShell independente do metodo de conexao.
+    # No WinRM isso ja e o padrao; em SSH nativo do Windows e obrigatorio,
+    # senao os modulos win_* falham ou a execucao trava esperando um shell
+    # posix que o Windows nao tem.
+    ansible_shell_type: powershell
+
     # Conta local RID-500 (Administrator/Administrador) a ser renomeada.
     ams_admin_target_name: "desiguadoido"
     ams_admin_candidate_names:
@@ -15,6 +21,11 @@
     ams_expected_awx_user: "mabreu"
 
   pre_tasks:
+    - name: Precheck | Detectar metodo de conexao (WinRM ou SSH)
+      ansible.builtin.debug:
+        msg: "Conexao: {{ ansible_connection | default('winrm') }} | Shell: {{ ansible_shell_type | default('powershell') }}"
+      tags: [always, precheck]
+
     - name: Precheck | Coletar contexto do servidor Windows
       ansible.windows.win_powershell:
         script: |

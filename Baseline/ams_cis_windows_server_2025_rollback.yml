@@ -7,9 +7,16 @@
     - community.windows
 
   vars:
+    # Forca shell PowerShell independente do metodo de conexao (WinRM ou SSH).
+    ansible_shell_type: powershell
     ams_rollback_administrator_to: "Administrator"
 
   pre_tasks:
+    - name: Rollback Precheck | Detectar metodo de conexao (WinRM ou SSH)
+      ansible.builtin.debug:
+        msg: "Conexao: {{ ansible_connection | default('winrm') }} | Shell: {{ ansible_shell_type | default('powershell') }}"
+      tags: [always, precheck]
+
     - name: Rollback Precheck | Coletar contexto do servidor Windows
       ansible.windows.win_powershell:
         script: |
