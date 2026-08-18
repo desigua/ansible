@@ -11,7 +11,9 @@
 
         - name: Executar comando para verificar SMBv1
           ansible.windows.win_shell: |
-            Get-WindowsOptionalFeature -Online -FeatureName SMB1Protocol | ConvertTo-Json -Compress
+            Get-WindowsOptionalFeature -Online -FeatureName SMB1Protocol |
+              Select-Object FeatureName, @{Name='State'; Expression={$_.State.ToString()}} |
+              ConvertTo-Json -Compress
           register: smb_status
           # Nao deixa o Ansible marcar a task como failed so por causa do rc do PowerShell.
           # A gente mesmo decide o que fazer com rc != 0 logo abaixo.
