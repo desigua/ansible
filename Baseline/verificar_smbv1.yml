@@ -1,0 +1,74 @@
+- name: Verificar SMBv1 e gerar arquivo de status
+  hosts: windows
+  gather_facts: no
+  tasks:
+    - name: Garantir que o status seja sempre gravado, mesmo em caso de erro
+      block:
+        - name: Criar diretorio C:\temp se nao existir
+          ansible.windows.win_file:
+            path: C:\temp
+            state: directory
+
+        - name: Executar comando para verificar SMBv1
+          ansible.windows.win_shell: |
+            Get-WindowsOptionalFeature -Online -FeatureName SMB1Protocol | ConvertTo-Json -Compress
+          register: smb_status
+          # Nao deixa o Ansible marcar a task como failed so por causa do rc do PowerShell.
+          # A gente mesmo decide o que fazer com rc != 0 logo abaixo.
+          failed_when: false
+          changed_when: false
+
+        - name: Interpretar status do SMBv1
+          ansible.builtin.set_fact:
+            smb_state: >-
+              {%- if smb_status.rc != 0 or smb_status.stdout | trim == '' -%}
+                ERRO
+              {%- else -%}
+                {{ (smb_status.stdout | trim | from_json).State }}
+              {%- endif -%}
+          # Se o parse do JSON falhar por qualquer motivo inesperado, cai pro ramo de erro
+          # em vez de derrubar o playbook.
+          ignore_errors: true
+
+        - name: Definir mensagem final de status
+          ansible.builtin.set_fact:
+            smb_msg: |-
+              Servidor: {{ inventory_hostname }}
+              Data/hora da verificacao: {{ lookup('pipe', 'date +\'%Y-%m-%d %H:%M:%S\'') }}
+              {% if smb_state is not defined or smb_state == 'ERRO' %}
+              Status SMBv1: NAO FOI POSSIVEL DETERMINAR
+              Detalhe: rc={{ smb_status.rc }} | stderr={{ smb_status.stderr | default('N/A') }}
+              {% elif smb_state == 'Enabled' %}
+              Status SMBv1: HABILITADO
+              {% elif smb_state == 'Disabled' %}
+              Status SMBv1: DESABILITADO
+              {% else %}
+              Status SMBv1: {{ smb_state }} (estado nao mapeado)
+              {% endif %}
+
+        - name: Gravar status no arquivo TXT
+          ansible.windows.win_copy:
+            content: "{{ smb_msg }}"
+            dest: C:\temp\status-smbv1.txt
+
+      rescue:
+        # Se QUALQUER task do block acima falhar de forma inesperada, ainda assim
+        # garante um TXT no destino, registrando o erro ocorrido.
+        - name: Garantir diretorio C:\temp mesmo apos falha
+          ansible.windows.win_file:
+            path: C:\temp
+            state: directory
+
+        - name: Gravar TXT de fallback com o erro ocorrido
+          ansible.windows.win_copy:
+            content: |
+              Servidor: {{ inventory_hostname }}
+              Data/hora da verificacao: {{ lookup('pipe', 'date +\'%Y-%m-%d %H:%M:%S\'') }}
+              Status SMBv1: NAO FOI POSSIVEL DETERMINAR (falha na execucao do playbook)
+              Erro: {{ ansible_failed_result.msg | default('erro desconhecido') }}
+            dest: C:\temp\status-smbv1.txt
+
+      always:
+        - name: Exibir resultado no console
+          ansible.builtin.debug:
+            msg: "{{ smb_msg | default('Status gravado via bloco de rescue (ver C:\\temp\\status-smbv1.txt)') }}"
