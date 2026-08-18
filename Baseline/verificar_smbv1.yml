@@ -1,5 +1,5 @@
 - name: Verificar SMBv1 e gerar arquivo de status
-  hosts: windows
+  hosts: all
   gather_facts: no
   tasks:
     - name: Garantir que o status seja sempre gravado, mesmo em caso de erro
