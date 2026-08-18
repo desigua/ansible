@@ -34,7 +34,7 @@
           ansible.builtin.set_fact:
             smb_msg: |-
               Servidor: {{ inventory_hostname }}
-              Data/hora da verificacao: {{ lookup('pipe', 'date +\'%Y-%m-%d %H:%M:%S\'') }}
+              Data/hora da verificacao: {{ now(utc=false).strftime('%Y-%m-%d %H:%M:%S') }}
               {% if smb_state is not defined or smb_state == 'ERRO' %}
               Status SMBv1: NAO FOI POSSIVEL DETERMINAR
               Detalhe: rc={{ smb_status.rc }} | stderr={{ smb_status.stderr | default('N/A') }}
@@ -63,7 +63,7 @@
           ansible.windows.win_copy:
             content: |
               Servidor: {{ inventory_hostname }}
-              Data/hora da verificacao: {{ lookup('pipe', 'date +\'%Y-%m-%d %H:%M:%S\'') }}
+              Data/hora da verificacao: {{ now(utc=false).strftime('%Y-%m-%d %H:%M:%S') }}
               Status SMBv1: NAO FOI POSSIVEL DETERMINAR (falha na execucao do playbook)
               Erro: {{ ansible_failed_result.msg | default('erro desconhecido') }}
             dest: C:\temp\status-smbv1.txt
