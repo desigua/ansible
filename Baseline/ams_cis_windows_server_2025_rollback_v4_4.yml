@@ -1,0 +1,594 @@
+---
+- name: AMS CIS Rollback V4.1 Completo - Windows Server 2019/2022/2025
+  hosts: all
+  gather_facts: false
+
+  collections:
+    - ansible.windows
+    - community.windows
+
+  vars:
+    # AWX/Windows SSH: garantir PowerShell mesmo quando a conexao for SSH.
+    ansible_shell_type: powershell
+
+    # REGRA FIXA SOLICITADA:
+    # O rollback NAO altera usuarios locais em nenhum servidor.
+    # Portanto, nao existe task para renomear Administrator/Administrador/RID-500
+    # e nao existe task para reabilitar/desabilitar Guest.
+
+    # REGRA FIXA SOLICITADA:
+    # Em servidores membros de dominio, politicas locais nao sao alteradas.
+    # As tasks locais usam when: not is_domain_member.
+
+    # Rollback V4 COMPLETO.
+    # Desfaz os controles aplicados pelo hardening, exceto usuarios locais.
+    # Atencao: reabilita protocolos legados inseguros quando o host for standalone.
+    ams_rollback_enable_legacy_protocols: true
+    ams_rollback_enable_spooler: true
+    ams_rollback_enable_ipv6: true
+    ams_rollback_disable_credential_guard: true
+    ams_rollback_disable_firewall_profiles: true
+    ams_rollback_disable_defender_realtime: true
+
+    # Subcategorias habilitadas pelo hardening atual.
+    ams_audit_subcategories:
+      - Credential Validation
+      - Kerberos Authentication Service
+      - Kerberos Service Ticket Operations
+      - Computer Account Management
+      - Other Account Management Events
+      - Security Group Management
+      - User Account Management
+      - Process Creation
+      - Logoff
+      - Logon
+      - Special Logon
+      - Account Lockout
+      - Audit Policy Change
+      - Authentication Policy Change
+      - Authorization Policy Change
+      - Filtering Platform Policy Change
+      - MPSSVC Rule-Level Policy Change
+      - Other Policy Change Events
+      - Sensitive Privilege Use
+      - System Integrity
+
+    # Tamanhos aproximados padrao para rollback dos logs.
+    ams_eventlog_security_default_size_bytes: 20971520
+    ams_eventlog_application_default_size_bytes: 20971520
+    ams_eventlog_system_default_size_bytes: 20971520
+
+    # Origem opcional para reinstalar o payload do SMB1Protocol quando o
+    # host nao tem acesso ao Windows Update (comum em servidores hardened,
+    # sem saida direta a internet). Se vazio, o Ansible tenta o caminho
+    # padrao (WU/WSUS) e, se falhar por falta de fonte (ex: 0x800f0916 /
+    # 0x800f081f), apenas registra o erro sem derrubar o playbook.
+    # Exemplo de valor: "D:\\wim\\windows\\winsxs" (winsxs extraido de um
+    # install.wim montado, da MESMA build do host).
+    ams_smb1_feature_source: ""
+
+  pre_tasks:
+    - name: Rollback Precheck | Detectar metodo de conexao
+      ansible.builtin.debug:
+        msg: "Conexao: {{ ansible_connection | default('winrm') }} | Shell: {{ ansible_shell_type | default('powershell') }}"
+      tags: [always, precheck]
+
+    - name: Rollback Precheck | Coletar contexto do servidor Windows
+      ansible.windows.win_powershell:
+        script: |
+          $ErrorActionPreference = 'Stop'
+          $cs = Get-CimInstance Win32_ComputerSystem
+          $os = Get-CimInstance Win32_OperatingSystem
+          $current = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+          $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
+          $isAdmin = $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+
+          [PSCustomObject]@{
+            ComputerName    = $env:COMPUTERNAME
+            Caption         = $os.Caption
+            BuildNumber     = [int]$os.BuildNumber
+            PartOfDomain    = [bool]$cs.PartOfDomain
+            Domain          = $cs.Domain
+            CurrentUser     = $current
+            IsAdministrator = [bool]$isAdmin
+          } | ConvertTo-Json -Compress
+      register: ams_precheck_raw
+      changed_when: false
+      tags: [always, precheck]
+
+    - name: Rollback Precheck | Converter contexto em facts
+      ansible.builtin.set_fact:
+        ams_server_info: "{{ ams_precheck_raw.output[0] | from_json }}"
+        is_domain_member: "{{ (ams_precheck_raw.output[0] | from_json).PartOfDomain | bool }}"
+      tags: [always, precheck]
+
+    - name: Rollback Precheck | Validar Windows Server 2019/2022/2025 e privilegio administrativo
+      ansible.builtin.assert:
+        that:
+          - ams_server_info.BuildNumber | int >= 17763
+          - ams_server_info.IsAdministrator | bool
+        fail_msg: "Servidor nao suportado ou usuario sem privilegio administrativo. Use Windows Server 2019+ e credencial administrativa no AWX."
+        success_msg: "Precheck aprovado para {{ ams_server_info.Caption }} build {{ ams_server_info.BuildNumber }} usando {{ ams_server_info.CurrentUser }}."
+      tags: [always, precheck]
+
+    - name: Rollback Precheck | Avisar regras de dominio e usuarios
+      ansible.builtin.debug:
+        msg:
+          - "Servidor membro de dominio: {{ ams_server_info.Domain }}"
+          - "Politicas locais NAO serao alteradas por este rollback."
+          - "Usuarios locais NAO serao alterados em nenhum cenario."
+      when: is_domain_member
+      tags: [always, precheck]
+
+  tasks:
+    ###########################################################################
+    # PASSWORD POLICY - somente standalone/workgroup
+    ###########################################################################
+    - name: Rollback Password Policy | Restaurar valores menos restritivos em standalone
+      when: not is_domain_member
+      tags: [password_policy, rollback]
+      block:
+        - name: Rollback Password Policy | Historico de senhas
+          community.windows.win_security_policy:
+            section: System Access
+            key: PasswordHistorySize
+            value: 0
+
+        - name: Rollback Password Policy | Idade maxima da senha
+          community.windows.win_security_policy:
+            section: System Access
+            key: MaximumPasswordAge
+            value: 42
+
+        - name: Rollback Password Policy | Tamanho minimo da senha
+          community.windows.win_security_policy:
+            section: System Access
+            key: MinimumPasswordLength
+            value: 0
+
+        - name: Rollback Password Policy | Complexidade de senha
+          community.windows.win_security_policy:
+            section: System Access
+            key: PasswordComplexity
+            value: 0
+
+    ###########################################################################
+    # ACCOUNT LOCKOUT - somente standalone/workgroup
+    # Usa net accounts para evitar falhas do modulo win_security_policy
+    # em configuracoes de bloqueio no Windows Server 2022/2025.
+    ###########################################################################
+    - name: Rollback Account Lockout | Desabilitar bloqueio de conta em standalone
+      when: not is_domain_member
+      ansible.windows.win_shell: |
+        net accounts /lockoutthreshold:0
+        if ($LASTEXITCODE -ne 0) { throw "Falha ao executar net accounts /lockoutthreshold:0. ExitCode=$LASTEXITCODE" }
+      changed_when: true
+      tags: [account_lockout, rollback]
+
+    ###########################################################################
+    # AUDIT POLICY - somente standalone/workgroup
+    ###########################################################################
+    - name: Rollback Audit Policy | Desabilitar auditoria avancada das subcategorias gerenciadas
+      when: not is_domain_member
+      ansible.windows.win_shell: |
+        $exists = auditpol /list /subcategory:* | Select-String -SimpleMatch "{{ item }}"
+        if ($exists) {
+          auditpol /set /subcategory:"{{ item }}" /success:disable /failure:disable
+          if ($LASTEXITCODE -ne 0) { throw "Falha ao alterar auditpol para {{ item }}. ExitCode=$LASTEXITCODE" }
+        }
+      loop: "{{ ams_audit_subcategories }}"
+      changed_when: true
+      tags: [audit_policy, rollback]
+
+    ###########################################################################
+    # WINDOWS FIREWALL - rollback completo em standalone/workgroup
+    ###########################################################################
+    - name: Rollback Firewall | Desabilitar perfis somente se explicitamente permitido
+      when:
+        - not is_domain_member
+        - ams_rollback_disable_firewall_profiles | bool
+      ansible.windows.win_powershell:
+        script: |
+          Set-NetFirewallProfile -Profile Domain,Private,Public -Enabled False
+      tags: [firewall, rollback]
+
+    ###########################################################################
+    # MICROSOFT DEFENDER - somente standalone/workgroup
+    ###########################################################################
+    - name: Rollback Defender | Restaurar MAPSReporting para Disabled quando disponivel
+      when: not is_domain_member
+      ansible.windows.win_powershell:
+        script: |
+          if (Get-Command Set-MpPreference -ErrorAction SilentlyContinue) {
+            Set-MpPreference -MAPSReporting Disabled
+          }
+      tags: [defender, rollback]
+
+    - name: Rollback Defender | Restaurar SubmitSamplesConsent para NeverSend quando disponivel
+      when: not is_domain_member
+      ansible.windows.win_powershell:
+        script: |
+          if (Get-Command Set-MpPreference -ErrorAction SilentlyContinue) {
+            Set-MpPreference -SubmitSamplesConsent 2
+          }
+      tags: [defender, rollback]
+
+    - name: Rollback Defender | Desabilitar protecao em tempo real somente se explicitamente permitido
+      when:
+        - not is_domain_member
+        - ams_rollback_disable_defender_realtime | bool
+      ansible.windows.win_powershell:
+        script: |
+          if (Get-Command Set-MpPreference -ErrorAction SilentlyContinue) {
+            Set-MpPreference -DisableRealtimeMonitoring $true
+          }
+      tags: [defender, rollback]
+
+    ###########################################################################
+    # POWERSHELL LOGGING - somente standalone/workgroup
+    ###########################################################################
+    - name: Rollback PowerShell Logging | Desabilitar Module Logging
+      when: not is_domain_member
+      ansible.windows.win_regedit:
+        path: HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell\ModuleLogging
+        name: EnableModuleLogging
+        data: 0
+        type: dword
+      tags: [powershell_logging, rollback]
+
+    - name: Rollback PowerShell Logging | Remover configuracao ModuleNames
+      when: not is_domain_member
+      ansible.windows.win_regedit:
+        path: HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell\ModuleLogging\ModuleNames
+        name: _
+        state: absent
+      tags: [powershell_logging, rollback]
+
+    - name: Rollback PowerShell Logging | Desabilitar Script Block Logging
+      when: not is_domain_member
+      ansible.windows.win_regedit:
+        path: HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell\ScriptBlockLogging
+        name: EnableScriptBlockLogging
+        data: 0
+        type: dword
+      tags: [powershell_logging, rollback]
+
+    - name: Rollback PowerShell Logging | Desabilitar Transcription
+      when: not is_domain_member
+      ansible.windows.win_regedit:
+        path: HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell\Transcription
+        name: EnableTranscripting
+        data: 0
+        type: dword
+      tags: [powershell_logging, rollback]
+
+    ###########################################################################
+    # SMBv1 / LLMNR / NETBIOS - rollback completo em standalone/workgroup
+    ###########################################################################
+    - name: Rollback SMBv1 | Reabilitar SMBv1 no rollback completo
+      when:
+        - not is_domain_member
+        - ams_rollback_enable_legacy_protocols | bool
+      tags: [smbv1, rollback]
+      block:
+        - name: Rollback SMBv1 | Verificar reboot pendente antes de mexer no componente
+          ansible.windows.win_powershell:
+            script: |
+              $pending = $false
+              $paths = @(
+                'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending',
+                'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired'
+              )
+              foreach ($p in $paths) {
+                if (Test-Path $p) { $pending = $true }
+              }
+              [PSCustomObject]@{ RebootPending = $pending } | ConvertTo-Json -Compress
+          register: ams_smb1_prereboot_check
+
+        - name: Rollback SMBv1 | Reiniciar antes de instalar (havia reboot pendente de outra operacao)
+          ansible.windows.win_reboot:
+            reboot_timeout: 900
+          when: (ams_smb1_prereboot_check.output[0] | from_json).RebootPending | default(false) | bool
+
+        - name: Rollback SMBv1 | Reinstalar componente opcional SMB1Protocol (se removido)
+          ansible.windows.win_powershell:
+            script: |
+              $rebootNeeded = $false
+              $source = '{{ ams_smb1_feature_source }}'
+              $results = New-Object System.Collections.Generic.List[object]
+
+              $features = @('SMB1Protocol','SMB1Protocol-Client','SMB1Protocol-Server')
+              foreach ($f in $features) {
+                $feature = Get-WindowsOptionalFeature -Online -FeatureName $f -ErrorAction SilentlyContinue
+                if (-not $feature) {
+                  $results.Add([PSCustomObject]@{ Feature = $f; Action = 'not-found'; Success = $true; Message = '' })
+                  continue
+                }
+                if ($feature.State -notin @('Disabled','DisabledWithPayloadRemoved')) {
+                  $results.Add([PSCustomObject]@{ Feature = $f; Action = 'already-enabled'; Success = $true; Message = '' })
+                  continue
+                }
+                try {
+                  if ([string]::IsNullOrWhiteSpace($source)) {
+                    $result = Enable-WindowsOptionalFeature -Online -FeatureName $f -NoRestart -ErrorAction Stop
+                  } else {
+                    $result = Enable-WindowsOptionalFeature -Online -FeatureName $f -Source $source -LimitAccess -NoRestart -ErrorAction Stop
+                  }
+                  if ($result.RestartNeeded) { $rebootNeeded = $true }
+                  $results.Add([PSCustomObject]@{ Feature = $f; Action = 'enabled'; Success = $true; Message = '' })
+                } catch {
+                  # Nao derruba o playbook: registra o erro (ex: 0x800f0916/
+                  # 0x800f081f = payload nao disponivel localmente nem via WU)
+                  # e segue para os proximos features/hosts.
+                  #
+                  # Diagnostico extra: testa se o host alcanca os endpoints
+                  # do Windows Update na porta 443. Ajuda a distinguir
+                  # "bloqueio de rede/proxy" (comum em VNets Azure sem saida
+                  # a internet) de "politica apontando para fonte invalida".
+                  $wuEndpoints = @('fe2.update.microsoft.com','download.windowsupdate.com')
+                  $wuReachability = foreach ($ep in $wuEndpoints) {
+                    try {
+                      $t = Test-NetConnection -ComputerName $ep -Port 443 -WarningAction SilentlyContinue -InformationLevel Quiet -ErrorAction Stop
+                      "$ep=$t"
+                    } catch {
+                      "$ep=erro-ao-testar"
+                    }
+                  }
+
+                  $results.Add([PSCustomObject]@{
+                    Feature = $f
+                    Action  = 'failed'
+                    Success = $false
+                    Message = $_.Exception.Message
+                    WindowsUpdateReachable = ($wuReachability -join '; ')
+                  })
+                }
+              }
+
+              [PSCustomObject]@{
+                RebootNeeded = $rebootNeeded
+                Results      = $results
+              } | ConvertTo-Json -Compress -Depth 5
+          register: ams_smb1_feature_result
+          failed_when: false
+          changed_when: >-
+            (ams_smb1_feature_result.output[0] | from_json).Results
+            | selectattr('Action', 'equalto', 'enabled') | list | length > 0
+
+        - name: Rollback SMBv1 | Exibir resultado da reinstalacao do componente
+          ansible.builtin.debug:
+            msg: "{{ (ams_smb1_feature_result.output[0] | from_json).Results }}"
+
+        - name: Rollback SMBv1 | Avisar quando algum feature nao pode ser reinstalado
+          ansible.builtin.debug:
+            msg: >-
+              Um ou mais componentes SMB1 nao puderam ser reinstalados (sem fonte
+              local/WU disponivel). Se precisar reativar o SMB1 de fato neste host,
+              defina ams_smb1_feature_source apontando para o winsxs de um
+              install.wim da mesma build, ou libere acesso a Windows Update/WSUS.
+          when: >-
+            (ams_smb1_feature_result.output[0] | from_json).Results
+            | selectattr('Success', 'equalto', false) | list | length > 0
+
+        - name: Rollback SMBv1 | Extrair necessidade de reboot
+          ansible.builtin.set_fact:
+            ams_smb1_reboot_needed: "{{ (ams_smb1_feature_result.output[0] | from_json).RebootNeeded | default(false) | bool }}"
+
+        - name: Rollback SMBv1 | Reiniciar servidor para concluir instalacao do componente
+          ansible.windows.win_reboot:
+            reboot_timeout: 900
+          when: ams_smb1_reboot_needed | bool
+
+        - name: Rollback SMBv1 | Aplicar EnableSMB1Protocol via Set-SmbServerConfiguration
+          ansible.windows.win_powershell:
+            script: |
+              $result = [PSCustomObject]@{ Applied = $false; Message = '' }
+
+              if (Get-Command Set-SmbServerConfiguration -ErrorAction SilentlyContinue) {
+                try {
+                  Set-SmbServerConfiguration -EnableSMB1Protocol $true -Force -ErrorAction Stop
+                  $result.Applied = $true
+                  $result.Message = 'SMB1 habilitado com sucesso.'
+                } catch {
+                  $result.Message = "Nao foi possivel aplicar Set-SmbServerConfiguration: $($_.Exception.Message)"
+                }
+              } else {
+                $result.Message = 'Cmdlet Set-SmbServerConfiguration indisponivel neste host.'
+              }
+
+              $result | ConvertTo-Json -Compress
+          register: ams_smb1_apply_result
+          changed_when: (ams_smb1_apply_result.output[0] | from_json).Applied | bool
+
+        - name: Rollback SMBv1 | Reportar resultado
+          ansible.builtin.debug:
+            msg: "{{ (ams_smb1_apply_result.output[0] | from_json).Message }}"
+
+    - name: Rollback LLMNR | Reabilitar LLMNR no rollback completo
+      when:
+        - not is_domain_member
+        - ams_rollback_enable_legacy_protocols | bool
+      ansible.windows.win_regedit:
+        path: HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\DNSClient
+        name: EnableMulticast
+        data: 1
+        type: dword
+      tags: [llmnr, rollback]
+
+    - name: Rollback NetBIOS | Reabilitar NetBIOS por DHCP/default no rollback completo
+      when:
+        - not is_domain_member
+        - ams_rollback_enable_legacy_protocols | bool
+      ansible.windows.win_powershell:
+        script: |
+          Get-CimInstance Win32_NetworkAdapterConfiguration | Where-Object { $_.IPEnabled } | ForEach-Object {
+            Invoke-CimMethod -InputObject $_ -MethodName SetTcpipNetbios -Arguments @{ TcpipNetbiosOptions = 0 } | Out-Null
+          }
+      tags: [netbios, rollback]
+
+    ###########################################################################
+    # NTLM / LSA / ANONYMOUS - somente standalone/workgroup
+    ###########################################################################
+    - name: Rollback NTLM | Retornar LmCompatibilityLevel para compatibilidade padrao
+      when: not is_domain_member
+      ansible.windows.win_regedit:
+        path: HKLM:\SYSTEM\CurrentControlSet\Control\Lsa
+        name: LmCompatibilityLevel
+        data: 3
+        type: dword
+      tags: [ntlm, rollback]
+
+    - name: Rollback LSA | Permitir LM Hash novamente no rollback completo
+      when:
+        - not is_domain_member
+        - ams_rollback_enable_legacy_protocols | bool
+      ansible.windows.win_regedit:
+        path: HKLM:\SYSTEM\CurrentControlSet\Control\Lsa
+        name: NoLMHash
+        data: 0
+        type: dword
+      tags: [lsa, rollback]
+
+    - name: Rollback Anonymous | Restaurar valores menos restritivos no rollback completo
+      when:
+        - not is_domain_member
+        - ams_rollback_enable_legacy_protocols | bool
+      ansible.windows.win_regedit:
+        path: HKLM:\SYSTEM\CurrentControlSet\Control\Lsa
+        name: "{{ item.name }}"
+        data: "{{ item.data }}"
+        type: dword
+      loop:
+        - { name: RestrictAnonymous, data: 0 }
+        - { name: RestrictAnonymousSAM, data: 0 }
+        - { name: EveryoneIncludesAnonymous, data: 1 }
+      tags: [anonymous, rollback]
+
+    ###########################################################################
+    # LOCAL ACCOUNTS
+    # Intencionalmente nao ha rollback de usuarios locais.
+    ###########################################################################
+    - name: Rollback Local Accounts | Avisar que usuarios locais nao sao alterados
+      ansible.builtin.debug:
+        msg: "Usuarios locais nao sao alterados por este rollback, conforme regra definida."
+      tags: [local_accounts, users, rollback]
+
+    ###########################################################################
+    # CREDENTIAL GUARD - somente standalone/workgroup
+    ###########################################################################
+    - name: Rollback Credential Guard | Desabilitar VBS/CG quando permitido
+      when:
+        - not is_domain_member
+        - ams_rollback_disable_credential_guard | bool
+      ansible.windows.win_regedit:
+        path: "{{ item.path }}"
+        name: "{{ item.name }}"
+        data: 0
+        type: dword
+      loop:
+        - { path: 'HKLM:\SYSTEM\CurrentControlSet\Control\DeviceGuard', name: 'EnableVirtualizationBasedSecurity' }
+        - { path: 'HKLM:\SYSTEM\CurrentControlSet\Control\DeviceGuard', name: 'RequirePlatformSecurityFeatures' }
+        - { path: 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa', name: 'LsaCfgFlags' }
+      tags: [credential_guard, rollback]
+
+    ###########################################################################
+    # TLS / SCHANNEL - somente standalone/workgroup
+    ###########################################################################
+    - name: Rollback TLS | Manter TLS 1.2 e TLS 1.3 habilitados
+      when: not is_domain_member
+      ansible.windows.win_regedit:
+        path: "HKLM:\\SYSTEM\\CurrentControlSet\\Control\\SecurityProviders\\SCHANNEL\\Protocols\\{{ item.protocol }}\\{{ item.role }}"
+        name: "{{ item.name }}"
+        data: "{{ item.data }}"
+        type: dword
+      loop:
+        - { protocol: 'TLS 1.2', role: 'Server', name: 'Enabled', data: 1 }
+        - { protocol: 'TLS 1.2', role: 'Server', name: 'DisabledByDefault', data: 0 }
+        - { protocol: 'TLS 1.2', role: 'Client', name: 'Enabled', data: 1 }
+        - { protocol: 'TLS 1.2', role: 'Client', name: 'DisabledByDefault', data: 0 }
+        - { protocol: 'TLS 1.3', role: 'Server', name: 'Enabled', data: 1 }
+        - { protocol: 'TLS 1.3', role: 'Server', name: 'DisabledByDefault', data: 0 }
+        - { protocol: 'TLS 1.3', role: 'Client', name: 'Enabled', data: 1 }
+        - { protocol: 'TLS 1.3', role: 'Client', name: 'DisabledByDefault', data: 0 }
+      tags: [tls, schannel, rollback]
+
+    - name: Rollback TLS Legacy | Reabilitar SSL/TLS antigos no rollback completo
+      when:
+        - not is_domain_member
+        - ams_rollback_enable_legacy_protocols | bool
+      ansible.windows.win_regedit:
+        path: "HKLM:\\SYSTEM\\CurrentControlSet\\Control\\SecurityProviders\\SCHANNEL\\Protocols\\{{ item.protocol }}\\{{ item.role }}"
+        name: "{{ item.name }}"
+        data: "{{ item.data }}"
+        type: dword
+      loop:
+        - { protocol: 'SSL 2.0', role: 'Server', name: 'Enabled', data: 1 }
+        - { protocol: 'SSL 2.0', role: 'Server', name: 'DisabledByDefault', data: 0 }
+        - { protocol: 'SSL 2.0', role: 'Client', name: 'Enabled', data: 1 }
+        - { protocol: 'SSL 2.0', role: 'Client', name: 'DisabledByDefault', data: 0 }
+        - { protocol: 'SSL 3.0', role: 'Server', name: 'Enabled', data: 1 }
+        - { protocol: 'SSL 3.0', role: 'Server', name: 'DisabledByDefault', data: 0 }
+        - { protocol: 'SSL 3.0', role: 'Client', name: 'Enabled', data: 1 }
+        - { protocol: 'SSL 3.0', role: 'Client', name: 'DisabledByDefault', data: 0 }
+        - { protocol: 'TLS 1.0', role: 'Server', name: 'Enabled', data: 1 }
+        - { protocol: 'TLS 1.0', role: 'Server', name: 'DisabledByDefault', data: 0 }
+        - { protocol: 'TLS 1.0', role: 'Client', name: 'Enabled', data: 1 }
+        - { protocol: 'TLS 1.0', role: 'Client', name: 'DisabledByDefault', data: 0 }
+        - { protocol: 'TLS 1.1', role: 'Server', name: 'Enabled', data: 1 }
+        - { protocol: 'TLS 1.1', role: 'Server', name: 'DisabledByDefault', data: 0 }
+        - { protocol: 'TLS 1.1', role: 'Client', name: 'Enabled', data: 1 }
+        - { protocol: 'TLS 1.1', role: 'Client', name: 'DisabledByDefault', data: 0 }
+      tags: [tls, schannel, rollback]
+
+    ###########################################################################
+    # EVENT LOGS - somente standalone/workgroup
+    ###########################################################################
+    - name: Rollback Event Logs | Restaurar tamanhos padrao aproximados
+      when: not is_domain_member
+      ansible.windows.win_powershell:
+        script: |
+          wevtutil sl Security /ms:{{ ams_eventlog_security_default_size_bytes | int }}
+          wevtutil sl Application /ms:{{ ams_eventlog_application_default_size_bytes | int }}
+          wevtutil sl System /ms:{{ ams_eventlog_system_default_size_bytes | int }}
+      tags: [eventlog, rollback]
+
+    ###########################################################################
+    # IPv6 / SPOOLER - somente standalone/workgroup
+    ###########################################################################
+    - name: Rollback IPv6 | Reabilitar IPv6 quando permitido
+      when:
+        - not is_domain_member
+        - ams_rollback_enable_ipv6 | bool
+      ansible.windows.win_regedit:
+        path: HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip6\Parameters
+        name: DisabledComponents
+        data: 0
+        type: dword
+      tags: [ipv6, rollback]
+
+    - name: Rollback Spooler | Reabilitar Print Spooler quando permitido
+      when:
+        - not is_domain_member
+        - ams_rollback_enable_spooler | bool
+      ansible.windows.win_service:
+        name: Spooler
+        state: started
+        start_mode: auto
+      tags: [spooler, services, rollback]
+
+  post_tasks:
+    - name: Resumo Rollback V4 Completo
+      ansible.builtin.debug:
+        msg:
+          - "Servidor: {{ inventory_hostname }}"
+          - "SO: {{ ams_server_info.Caption }} build {{ ams_server_info.BuildNumber }}"
+          - "Membro de dominio: {{ is_domain_member }}"
+          - "Politicas locais alteradas: {{ not is_domain_member }}"
+          - "Usuarios locais alterados: False"
+          - "Legacy protocols reabilitados: {{ ams_rollback_enable_legacy_protocols and not is_domain_member }}"
+          - "Credential Guard rollback: {{ ams_rollback_disable_credential_guard and not is_domain_member }}"
+          - "Spooler reabilitado: {{ ams_rollback_enable_spooler and not is_domain_member }}"
+          - "IPv6 reabilitado: {{ ams_rollback_enable_ipv6 and not is_domain_member }}"
+          - "Firewall desabilitado: {{ ams_rollback_disable_firewall_profiles and not is_domain_member }}"
+          - "Defender realtime desabilitado: {{ ams_rollback_disable_defender_realtime and not is_domain_member }}"
+      tags: [always]
