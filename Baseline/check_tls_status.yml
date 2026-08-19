@@ -143,9 +143,6 @@
           $lines.Add("  TLS 1.0 habilitado (Server e/ou Client): $tls10Habilitado")
           $lines.Add("  TLS 1.1 habilitado (Server e/ou Client): $tls11Habilitado")
           $lines.Add('')
-          $lines.Add('Observacao: "NaoConfigurado-SeguePadraoDoSO" significa que nao')
-          $lines.Add('existe chave de registro definindo o protocolo explicitamente,')
-          $lines.Add('logo o comportamento segue o padrao do Windows nesta build.')
           $lines.Add('=========================================================')
 
           Set-Content -Path $outputFile -Value $lines -Encoding UTF8
