@@ -1,0 +1,180 @@
+---
+- name: AMS Verificacao TLS 1.0 / TLS 1.1 - Windows Server 2022/2025
+  hosts: all
+  gather_facts: false
+
+  collections:
+    - ansible.windows
+
+  vars:
+    # AWX/Windows SSH: garantir PowerShell mesmo quando a conexao for SSH.
+    ansible_shell_type: powershell
+
+    ams_tls_output_dir: 'C:\temp'
+    ams_tls_output_file: 'C:\temp\status-tls.txt'
+
+  pre_tasks:
+    - name: Precheck | Detectar metodo de conexao
+      ansible.builtin.debug:
+        msg: "Conexao: {{ ansible_connection | default('winrm') }} | Shell: {{ ansible_shell_type | default('powershell') }}"
+      tags: [always, precheck]
+
+    - name: Precheck | Coletar contexto do servidor Windows
+      ansible.windows.win_powershell:
+        script: |
+          $ErrorActionPreference = 'Stop'
+          $os = Get-CimInstance Win32_OperatingSystem
+          [PSCustomObject]@{
+            ComputerName = $env:COMPUTERNAME
+            Caption      = $os.Caption
+            BuildNumber  = [int]$os.BuildNumber
+          } | ConvertTo-Json -Compress
+      register: ams_tls_precheck_raw
+      changed_when: false
+      tags: [always, precheck]
+
+    - name: Precheck | Converter contexto em facts
+      ansible.builtin.set_fact:
+        ams_server_info: "{{ ams_tls_precheck_raw.output[0] | from_json }}"
+      tags: [always, precheck]
+
+    - name: Precheck | Validar Windows Server 2022/2025 (build >= 20348)
+      ansible.builtin.assert:
+        that:
+          - ams_server_info.BuildNumber | int >= 20348
+        fail_msg: "Servidor nao suportado. Este playbook cobre apenas Windows Server 2022 (build 20348+) e 2025."
+        success_msg: "Precheck aprovado para {{ ams_server_info.Caption }} build {{ ams_server_info.BuildNumber }}."
+      tags: [always, precheck]
+
+  tasks:
+    ###########################################################################
+    # TLS 1.0 / TLS 1.1 - VERIFICACAO E RELATORIO
+    ###########################################################################
+    - name: TLS Check | Garantir que C:\temp existe
+      ansible.windows.win_file:
+        path: "{{ ams_tls_output_dir }}"
+        state: directory
+      tags: [tls, tls_check]
+
+    - name: TLS Check | Verificar TLS 1.0/1.1 e gravar status-tls.txt
+      ansible.windows.win_powershell:
+        script: |
+          $ErrorActionPreference = 'Stop'
+
+          $outputFile = '{{ ams_tls_output_file }}'
+
+          function Get-ProtocolStatus {
+            param($protocol, $role)
+
+            $path = "HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\SCHANNEL\Protocols\$protocol\$role"
+
+            if (-not (Test-Path $path)) {
+              return [PSCustomObject]@{
+                Protocol          = $protocol
+                Role              = $role
+                Enabled           = $null
+                DisabledByDefault = $null
+                Status            = 'NaoConfigurado-SeguePadraoDoSO'
+              }
+            }
+
+            $enabled           = (Get-ItemProperty -Path $path -Name Enabled -ErrorAction SilentlyContinue).Enabled
+            $disabledByDefault = (Get-ItemProperty -Path $path -Name DisabledByDefault -ErrorAction SilentlyContinue).DisabledByDefault
+
+            $status = if ($enabled -eq 0) {
+              'Desabilitado'
+            } elseif ($enabled -eq 1 -and $disabledByDefault -eq 0) {
+              'Habilitado'
+            } elseif ($null -eq $enabled -and $null -eq $disabledByDefault) {
+              'NaoConfigurado-SeguePadraoDoSO'
+            } else {
+              'ParcialmenteConfigurado-VerificarManualmente'
+            }
+
+            [PSCustomObject]@{
+              Protocol          = $protocol
+              Role              = $role
+              Enabled           = $enabled
+              DisabledByDefault = $disabledByDefault
+              Status            = $status
+            }
+          }
+
+          $combos = @(
+            @{ Protocol = 'TLS 1.0'; Role = 'Server' },
+            @{ Protocol = 'TLS 1.0'; Role = 'Client' },
+            @{ Protocol = 'TLS 1.1'; Role = 'Server' },
+            @{ Protocol = 'TLS 1.1'; Role = 'Client' }
+          )
+
+          $results = @(foreach ($c in $combos) { Get-ProtocolStatus -protocol $c.Protocol -role $c.Role })
+
+          $computerName = $env:COMPUTERNAME
+          $osInfo       = Get-CimInstance Win32_OperatingSystem
+          $timestamp    = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+
+          # Considera "habilitado" quando explicitamente Enabled=1, ou quando
+          # nao ha chave de registro (segue o padrao do SO, que hoje ainda
+          # suporta TLS 1.0/1.1 por padrao salvo desabilitacao explicita).
+          $tls10Habilitado = @($results | Where-Object {
+            $_.Protocol -eq 'TLS 1.0' -and $_.Status -in @('Habilitado', 'NaoConfigurado-SeguePadraoDoSO')
+          }).Count -gt 0
+
+          $tls11Habilitado = @($results | Where-Object {
+            $_.Protocol -eq 'TLS 1.1' -and $_.Status -in @('Habilitado', 'NaoConfigurado-SeguePadraoDoSO')
+          }).Count -gt 0
+
+          $lines = New-Object System.Collections.Generic.List[string]
+          $lines.Add('=========================================================')
+          $lines.Add(' Relatorio de Status - TLS 1.0 / TLS 1.1')
+          $lines.Add('=========================================================')
+          $lines.Add("Servidor   : $computerName")
+          $lines.Add("SO         : $($osInfo.Caption) build $($osInfo.BuildNumber)")
+          $lines.Add("Gerado em  : $timestamp")
+          $lines.Add('')
+          $lines.Add('Detalhamento por protocolo/role:')
+          foreach ($r in $results) {
+            $enabledStr = if ($null -eq $r.Enabled) { 'N/A' } else { $r.Enabled }
+            $disabledByDefaultStr = if ($null -eq $r.DisabledByDefault) { 'N/A' } else { $r.DisabledByDefault }
+            $lines.Add("  [$($r.Protocol) - $($r.Role)] Status: $($r.Status) | Enabled=$enabledStr | DisabledByDefault=$disabledByDefaultStr")
+          }
+          $lines.Add('')
+          $lines.Add('Resumo:')
+          $lines.Add("  TLS 1.0 habilitado (Server e/ou Client): $tls10Habilitado")
+          $lines.Add("  TLS 1.1 habilitado (Server e/ou Client): $tls11Habilitado")
+          $lines.Add('')
+          $lines.Add('Observacao: "NaoConfigurado-SeguePadraoDoSO" significa que nao')
+          $lines.Add('existe chave de registro definindo o protocolo explicitamente,')
+          $lines.Add('logo o comportamento segue o padrao do Windows nesta build.')
+          $lines.Add('=========================================================')
+
+          Set-Content -Path $outputFile -Value $lines -Encoding UTF8
+
+          [PSCustomObject]@{
+            ComputerName    = $computerName
+            Tls10Habilitado = $tls10Habilitado
+            Tls11Habilitado = $tls11Habilitado
+            OutputFile      = $outputFile
+            Results         = $results
+          } | ConvertTo-Json -Compress -Depth 5
+      register: ams_tls_check_result
+      changed_when: true
+      tags: [tls, tls_check]
+
+    - name: TLS Check | Exibir resumo do resultado
+      ansible.builtin.debug:
+        msg:
+          - "Servidor: {{ (ams_tls_check_result.output[0] | from_json).ComputerName }}"
+          - "TLS 1.0 habilitado: {{ (ams_tls_check_result.output[0] | from_json).Tls10Habilitado }}"
+          - "TLS 1.1 habilitado: {{ (ams_tls_check_result.output[0] | from_json).Tls11Habilitado }}"
+          - "Arquivo gerado: {{ (ams_tls_check_result.output[0] | from_json).OutputFile }}"
+      tags: [tls, tls_check]
+
+  post_tasks:
+    - name: Resumo Verificacao TLS
+      ansible.builtin.debug:
+        msg:
+          - "Servidor: {{ inventory_hostname }}"
+          - "SO: {{ ams_server_info.Caption }} build {{ ams_server_info.BuildNumber }}"
+          - "Relatorio gravado em: {{ ams_tls_output_file }}"
+      tags: [always]
