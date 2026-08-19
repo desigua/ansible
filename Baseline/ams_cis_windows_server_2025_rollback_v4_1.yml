@@ -260,22 +260,59 @@
       when:
         - not is_domain_member
         - ams_rollback_enable_legacy_protocols | bool
-      ansible.windows.win_powershell:
-        script: |
-          $ErrorActionPreference = 'Stop'
-
-          if (Get-Command Set-SmbServerConfiguration -ErrorAction SilentlyContinue) {
-            Set-SmbServerConfiguration -EnableSMB1Protocol $true -Force
-          }
-
-          $features = @('SMB1Protocol','SMB1Protocol-Client','SMB1Protocol-Server')
-          foreach ($f in $features) {
-            $feature = Get-WindowsOptionalFeature -Online -FeatureName $f -ErrorAction SilentlyContinue
-            if ($feature -and $feature.State -in @('Disabled','DisabledWithPayloadRemoved')) {
-              Enable-WindowsOptionalFeature -Online -FeatureName $f -NoRestart -ErrorAction SilentlyContinue | Out-Null
-            }
-          }
       tags: [smbv1, rollback]
+      block:
+        - name: Rollback SMBv1 | Reinstalar componente opcional SMB1Protocol (se removido)
+          ansible.windows.win_powershell:
+            script: |
+              $ErrorActionPreference = 'Stop'
+              $rebootNeeded = $false
+
+              $features = @('SMB1Protocol','SMB1Protocol-Client','SMB1Protocol-Server')
+              foreach ($f in $features) {
+                $feature = Get-WindowsOptionalFeature -Online -FeatureName $f -ErrorAction SilentlyContinue
+                if ($feature -and $feature.State -in @('Disabled','DisabledWithPayloadRemoved')) {
+                  $result = Enable-WindowsOptionalFeature -Online -FeatureName $f -NoRestart -ErrorAction Stop
+                  if ($result.RestartNeeded) { $rebootNeeded = $true }
+                }
+              }
+
+              [PSCustomObject]@{ RebootNeeded = $rebootNeeded } | ConvertTo-Json -Compress
+          register: ams_smb1_feature_result
+
+        - name: Rollback SMBv1 | Extrair necessidade de reboot
+          ansible.builtin.set_fact:
+            ams_smb1_reboot_needed: "{{ (ams_smb1_feature_result.output[0] | from_json).RebootNeeded | default(false) | bool }}"
+
+        - name: Rollback SMBv1 | Reiniciar servidor para concluir instalacao do componente
+          ansible.windows.win_reboot:
+            reboot_timeout: 900
+          when: ams_smb1_reboot_needed | bool
+
+        - name: Rollback SMBv1 | Aplicar EnableSMB1Protocol via Set-SmbServerConfiguration
+          ansible.windows.win_powershell:
+            script: |
+              $result = [PSCustomObject]@{ Applied = $false; Message = '' }
+
+              if (Get-Command Set-SmbServerConfiguration -ErrorAction SilentlyContinue) {
+                try {
+                  Set-SmbServerConfiguration -EnableSMB1Protocol $true -Force -ErrorAction Stop
+                  $result.Applied = $true
+                  $result.Message = 'SMB1 habilitado com sucesso.'
+                } catch {
+                  $result.Message = "Nao foi possivel aplicar Set-SmbServerConfiguration: $($_.Exception.Message)"
+                }
+              } else {
+                $result.Message = 'Cmdlet Set-SmbServerConfiguration indisponivel neste host.'
+              }
+
+              $result | ConvertTo-Json -Compress
+          register: ams_smb1_apply_result
+          changed_when: (ams_smb1_apply_result.output[0] | from_json).Applied | bool
+
+        - name: Rollback SMBv1 | Reportar resultado
+          ansible.builtin.debug:
+            msg: "{{ (ams_smb1_apply_result.output[0] | from_json).Message }}"
 
     - name: Rollback LLMNR | Reabilitar LLMNR no rollback completo
       when:
